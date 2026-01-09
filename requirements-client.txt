@@ -1,0 +1,5 @@
+# Frontend Dependencies (PySide6 Qt)
+PySide6>=6.6.0
+
+# Additional Qt tools
+PySide6-Addons>=6.6.0
