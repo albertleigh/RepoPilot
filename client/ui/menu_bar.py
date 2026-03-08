@@ -121,7 +121,7 @@ class AppMenuBar(QMenuBar):
         help_menu.addSeparator()
         
         # About
-        about_action = QAction("&About RepoWiki", self)
-        about_action.setStatusTip("About RepoWiki")
+        about_action = QAction("&About RepoCode", self)
+        about_action.setStatusTip("About RepoCode")
         about_action.triggered.connect(self.about_requested.emit)
         help_menu.addAction(about_action)

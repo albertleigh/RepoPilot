@@ -1,5 +1,5 @@
 """
-Main Window for RepoWiki Application
+Main Window for RepoCode Application
 Zeal-like interface with menu, search, side panels, and chat tabs
 """
 from PySide6.QtWidgets import (
@@ -29,7 +29,7 @@ class MainWindow(QMainWindow):
     
     def init_ui(self):
         """Initialize the main UI"""
-        self.setWindowTitle("RepoWiki - Repository Documentation & Chat")
+        self.setWindowTitle("RepoCode - Repository Documentation & Chat")
         self.setGeometry(100, 100, 1400, 900)
         
         # Create menu bar
@@ -136,8 +136,8 @@ class MainWindow(QMainWindow):
         """Handle about action"""
         QMessageBox.about(
             self,
-            "About RepoWiki",
-            "<h3>RepoWiki</h3>"
+            "About RepoCode",
+            "<h3>RepoCode</h3>"
             "<p>Version 1.0.0</p>"
             "<p>A Zeal-like repository documentation and chat interface.</p>"
             "<p>Powered by Qt and Python.</p>"

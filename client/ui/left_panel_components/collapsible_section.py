@@ -37,13 +37,12 @@ class CollapsibleSection(QWidget):
         self.header_frame.setFrameShape(QFrame.StyledPanel)
         self.header_frame.setStyleSheet("""
             QFrame {
-                background-color: #f0f0f0;
-                border: 1px solid #ccc;
+                background-color: palette(button);
+                border: 1px solid palette(mid);
                 border-radius: 3px;
             }
             QFrame:hover {
-                background-color: #e8e8e8;
-                cursor: pointer;
+                background-color: palette(midlight);
             }
         """)
         self.header_frame.mousePressEvent = self._header_clicked
@@ -60,6 +59,7 @@ class CollapsibleSection(QWidget):
                 border: none;
                 font-weight: bold;
                 background: transparent;
+                color: palette(button-text);
             }
         """)
         self.toggle_button.clicked.connect(self.toggle)
@@ -74,6 +74,7 @@ class CollapsibleSection(QWidget):
                 background: transparent;
                 border: none;
                 padding: 0px;
+                color: palette(button-text);
             }
         """)
         header_layout.addWidget(self.title_label)
@@ -88,19 +89,20 @@ class CollapsibleSection(QWidget):
             self.action_button.setToolTip(self.action_button_tooltip)
             self.action_button.setStyleSheet("""
                 QPushButton {
-                    border: 1px solid #999;
+                    border: 1px solid palette(mid);
                     border-radius: 3px;
-                    background: white;
+                    background: palette(button);
+                    color: palette(button-text);
                     font-weight: bold;
                     font-size: 14px;
                     padding: 2px 0px;
                 }
                 QPushButton:hover {
-                    background: #e0e0e0;
-                    border: 1px solid #666;
+                    background: palette(midlight);
+                    border: 1px solid palette(dark);
                 }
                 QPushButton:pressed {
-                    background: #d0d0d0;
+                    background: palette(dark);
                 }
             """)
             self.action_button.clicked.connect(self.action_button_clicked.emit)

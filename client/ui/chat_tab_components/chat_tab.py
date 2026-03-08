@@ -32,7 +32,7 @@ class ChatTab(QWidget):
         # Header with context info
         header_layout = QHBoxLayout()
         context_label = QLabel(f"💬 Chat - Repo: {self.repo_name} | LLM: {self.llm_name}")
-        context_label.setStyleSheet("font-weight: bold; padding: 5px; background-color: #f0f0f0;")
+        context_label.setStyleSheet("font-weight: bold; padding: 5px; background-color: palette(midlight); color: palette(window-text);")
         header_layout.addWidget(context_label)
         layout.addLayout(header_layout)
         
@@ -95,10 +95,25 @@ class ChatTab(QWidget):
         """Add a message to the chat display"""
         timestamp = datetime.now().strftime("%H:%M:%S")
         
+        # Use palette-aware colors for sender names
+        palette = self.palette()
+        highlight = palette.highlight().color()
+        link = palette.link().color()
+        # User gets the link color, assistant gets a contrasting accent
+        if sender == "User":
+            sender_color = f"rgb({link.red()}, {link.green()}, {link.blue()})"
+        else:
+            # Shift highlight hue for assistant to differentiate
+            accent = highlight.lighter(130) if highlight.lightness() < 128 else highlight.darker(130)
+            sender_color = f"rgb({accent.red()}, {accent.green()}, {accent.blue()})"
+
+        fg = palette.windowText().color()
+        text_color = f"rgb({fg.red()}, {fg.green()}, {fg.blue()})"
+
         formatted_message = f"""
 <div style="margin-bottom: 10px;">
-    <b style="color: {'#0066cc' if sender == 'User' else '#cc6600'};">[{timestamp}] {sender}:</b><br>
-    <span style="margin-left: 20px;">{message}</span>
+    <b style="color: {sender_color};">[{timestamp}] {sender}:</b><br>
+    <span style="margin-left: 20px; color: {text_color};">{message}</span>
 </div>
         """
         
