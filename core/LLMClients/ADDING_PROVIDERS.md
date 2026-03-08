@@ -15,7 +15,7 @@ Define `PROVIDER` (human-readable name) and `FIELDS` (list of field
 descriptors) as class-level attributes:
 
 ```python
-from .base import LLMClient
+from .base import LLMClient, LLMResponse, ToolCall
 
 
 class MyProviderClient(LLMClient):
@@ -71,10 +71,52 @@ class MyProviderClient(LLMClient):
     def is_available(self) -> bool:
         # Quick check that credentials and endpoint work
         ...
+
+    def send_with_tools(
+        self,
+        messages: list[dict],
+        tools: list[dict],
+        system: str = "",
+    ) -> LLMResponse:
+        # Call your provider with tool definitions.
+        # Parse the response into an LLMResponse with:
+        #   - text: any text content
+        #   - tool_calls: list of ToolCall(id, name, input)
+        #   - stop_reason: "tool_use" or "end_turn"
+        #   - assistant_message: provider-native assistant dict
+        #     to append to the conversation
+        ...
+
+    def make_tool_results(self, results: list[dict]) -> list[dict]:
+        # Convert [{"tool_use_id": str, "output": str}, ...] into
+        # provider-native message(s) to append to the conversation.
+        #
+        # Anthropic format: one user message with a list of tool_result parts
+        # OpenAI format:    one {"role": "tool"} message per result
+        ...
 ```
 
 > **Important:** The `key` values in `FIELDS` must match the `__init__`
 > parameter names — the dialog passes them as keyword arguments.
+
+#### Tool-use contract
+
+The `send_with_tools` / `make_tool_results` pair enables the
+`EngineerManager` agent loop to perform multi-step tool calling with
+any provider.  The tool definitions use the **Anthropic schema shape**
+(`{name, description, input_schema}`) as the canonical format.  If your
+provider uses a different wire format (e.g. OpenAI function-calling),
+translate inside `send_with_tools` — see `GPT5OnAzureClient._convert_tools`
+for an example.
+
+Return values:
+
+| Field               | Type              | Description |
+|---------------------|-------------------|-------------|
+| `text`              | `str`             | Assistant's text output (may be empty during tool calls) |
+| `tool_calls`        | `list[ToolCall]`  | Zero or more `ToolCall(id, name, input)` objects |
+| `stop_reason`       | `str`             | `"tool_use"` if the model wants tools executed, otherwise `"end_turn"` |
+| `assistant_message` | `dict`            | Provider-native message dict to append to history as-is |
 
 ### 2. Register it in `AppContext`
 

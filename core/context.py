@@ -11,6 +11,7 @@ import platform
 from pathlib import Path
 
 from .LLMClients.base import LLMClientRegistry, LLMProviderRegistry
+from .engineer_manager.registry import EngineerManagerRegistry
 from .skills.skill_registry import SkillRegistry
 
 
@@ -44,6 +45,8 @@ class AppContext:
             skills_dir=self.base_dir / "skills",
         )
         self.skill_registry.load()
+
+        self.engineer_manager_registry = EngineerManagerRegistry()
 
     # ------------------------------------------------------------------
     # Provider auto-registration

@@ -6,8 +6,28 @@ from __future__ import annotations
 import json
 import logging
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+
+@dataclass
+class ToolCall:
+    """A single tool invocation requested by the LLM."""
+
+    id: str
+    name: str
+    input: dict
+
+
+@dataclass
+class LLMResponse:
+    """Structured response from an LLM that may include tool calls."""
+
+    text: str
+    tool_calls: list[ToolCall] = field(default_factory=list)
+    stop_reason: str = "end_turn"  # "end_turn" or "tool_use"
+    assistant_message: dict = field(default_factory=dict)
 
 
 class LLMClient(ABC):
@@ -56,6 +76,24 @@ class LLMClient(ABC):
     @abstractmethod
     def is_available(self) -> bool:
         """Quick connectivity / auth check.  Return True when usable."""
+
+    @abstractmethod
+    def send_with_tools(
+        self,
+        messages: list[dict],
+        tools: list[dict],
+        system: str = "",
+    ) -> LLMResponse:
+        """Send messages with tool definitions and return a structured
+        response that may contain tool-use requests."""
+
+    @abstractmethod
+    def make_tool_results(self, results: list[dict]) -> list[dict]:
+        """Convert tool execution results to provider-native message format.
+
+        Each entry in *results* is ``{"tool_use_id": str, "output": str}``.
+        Returns one or more message dicts to append to the conversation.
+        """
 
 
 class LLMProviderRegistry:

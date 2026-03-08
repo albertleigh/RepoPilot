@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import anthropic
 
-from .base import LLMClient
+from .base import LLMClient, LLMResponse, ToolCall
 
 
 class ClaudeOnAzureClient(LLMClient):
@@ -91,3 +91,55 @@ class ClaudeOnAzureClient(LLMClient):
             return True
         except Exception:
             return False
+
+    # -- Tool-use interface --
+
+    def send_with_tools(
+        self,
+        messages: list[dict],
+        tools: list[dict],
+        system: str = "",
+    ) -> LLMResponse:
+        kwargs: dict = {
+            "model": self._model_id,
+            "max_tokens": self.MAX_TOKENS,
+            "messages": messages,
+            "tools": tools,
+        }
+        if system:
+            kwargs["system"] = system
+        response = self._client.messages.create(**kwargs)
+
+        text_parts: list[str] = []
+        tool_calls: list[ToolCall] = []
+        for block in response.content:
+            if block.type == "text":
+                text_parts.append(block.text)
+            elif block.type == "tool_use":
+                tool_calls.append(
+                    ToolCall(id=block.id, name=block.name, input=block.input)
+                )
+
+        return LLMResponse(
+            text="\n".join(text_parts),
+            tool_calls=tool_calls,
+            stop_reason=(
+                "tool_use" if response.stop_reason == "tool_use" else "end_turn"
+            ),
+            assistant_message={"role": "assistant", "content": response.content},
+        )
+
+    def make_tool_results(self, results: list[dict]) -> list[dict]:
+        return [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": r["tool_use_id"],
+                        "content": str(r["output"]),
+                    }
+                    for r in results
+                ],
+            }
+        ]

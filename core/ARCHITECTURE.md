@@ -88,7 +88,9 @@ ctx.setup_my_service()
 
 ## Current services
 
-| Attribute                  | Type                   | Purpose                                    |
-|----------------------------|------------------------|--------------------------------------------|
-| `llm_provider_registry`   | `LLMProviderRegistry`  | Maps provider names → LLMClient subclasses |
-| `llm_client_registry`     | `LLMClientRegistry`    | Tracks live LLM client instances by name   |
+| Attribute                    | Type                       | Purpose                                      |
+|------------------------------|----------------------------|----------------------------------------------|
+| `llm_provider_registry`     | `LLMProviderRegistry`      | Maps provider names → LLMClient subclasses   |
+| `llm_client_registry`       | `LLMClientRegistry`        | Tracks live LLM client instances by name     |
+| `skill_registry`            | `SkillRegistry`            | Folder-based skill store (`<base_dir>/skills/`) |
+| `engineer_manager_registry` | `EngineerManagerRegistry`  | Maps repo paths → live EngineerManager instances |

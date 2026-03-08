@@ -6,9 +6,11 @@ Azure OpenAI endpoint.
 """
 from __future__ import annotations
 
+import json
+
 import openai
 
-from .base import LLMClient
+from .base import LLMClient, LLMResponse, ToolCall
 
 
 class GPT5OnAzureClient(LLMClient):
@@ -101,3 +103,89 @@ class GPT5OnAzureClient(LLMClient):
             return True
         except Exception:
             return False
+
+    # -- Tool-use interface --
+
+    @staticmethod
+    def _convert_tools(tools: list[dict]) -> list[dict]:
+        """Translate Anthropic-style tool defs to OpenAI format."""
+        return [
+            {
+                "type": "function",
+                "function": {
+                    "name": t["name"],
+                    "description": t.get("description", ""),
+                    "parameters": t.get(
+                        "input_schema",
+                        {"type": "object", "properties": {}},
+                    ),
+                },
+            }
+            for t in tools
+        ]
+
+    def send_with_tools(
+        self,
+        messages: list[dict],
+        tools: list[dict],
+        system: str = "",
+    ) -> LLMResponse:
+        oai_tools = self._convert_tools(tools)
+        msgs = list(messages)
+        if system:
+            msgs.insert(0, {"role": "system", "content": system})
+
+        response = self._client.chat.completions.create(
+            model=self._model_id,
+            max_completion_tokens=self.MAX_TOKENS,
+            messages=msgs,
+            tools=oai_tools,
+        )
+        choice = response.choices[0]
+
+        tool_calls: list[ToolCall] = []
+        assistant_msg: dict = {
+            "role": "assistant",
+            "content": choice.message.content,
+        }
+
+        if choice.message.tool_calls:
+            raw_tool_calls = []
+            for tc in choice.message.tool_calls:
+                tool_calls.append(
+                    ToolCall(
+                        id=tc.id,
+                        name=tc.function.name,
+                        input=json.loads(tc.function.arguments),
+                    )
+                )
+                raw_tool_calls.append(
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {
+                            "name": tc.function.name,
+                            "arguments": tc.function.arguments,
+                        },
+                    }
+                )
+            assistant_msg["tool_calls"] = raw_tool_calls
+
+        return LLMResponse(
+            text=choice.message.content or "",
+            tool_calls=tool_calls,
+            stop_reason=(
+                "tool_use" if choice.finish_reason == "tool_calls" else "end_turn"
+            ),
+            assistant_message=assistant_msg,
+        )
+
+    def make_tool_results(self, results: list[dict]) -> list[dict]:
+        return [
+            {
+                "role": "tool",
+                "tool_call_id": r["tool_use_id"],
+                "content": str(r["output"]),
+            }
+            for r in results
+        ]
