@@ -9,6 +9,8 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Signal, Qt
 from PySide6.QtGui import QAction
 
+from core.skills.skill_registry import SkillRegistry
+
 
 class SkillTree(QWidget):
     """Skill tree widget with management controls"""
@@ -17,13 +19,14 @@ class SkillTree(QWidget):
     skill_selected = Signal(str)  # Emits skill name
     skill_add_requested = Signal()
     skill_remove_requested = Signal(str)
-    skill_configure_requested = Signal(str)
     
-    def __init__(self, show_header: bool = True, parent=None):
+    def __init__(self, skill_registry: SkillRegistry,
+                 show_header: bool = True, parent=None):
         super().__init__(parent)
+        self._skill_reg = skill_registry
         self.show_header = show_header
         self.setup_ui()
-        self._load_dummy_data()
+        self.refresh()
     
     def setup_ui(self):
         """Create skill tree UI"""
@@ -54,27 +57,13 @@ class SkillTree(QWidget):
         self.tree.itemClicked.connect(self._on_item_clicked)
         layout.addWidget(self.tree)
     
-    def _load_dummy_data(self):
-        """Load dummy skill data"""
-        skills = [
-            {"name": "Code Analysis", "category": "Analysis", "status": "enabled"},
-            {"name": "Documentation Generator", "category": "Generation", "status": "enabled"},
-            {"name": "Test Generator", "category": "Testing", "status": "disabled"},
-            {"name": "Refactoring Assistant", "category": "Code Quality", "status": "enabled"},
-        ]
-        
-        for skill in skills:
-            skill_item = QTreeWidgetItem(self.tree)
-            status_icon = "✓" if skill['status'] == "enabled" else "✗"
-            skill_item.setText(0, f"{status_icon} {skill['name']}")
-            skill_item.setData(0, Qt.UserRole, skill['name'])
-            
-            # Add details as child items
-            category_item = QTreeWidgetItem(skill_item)
-            category_item.setText(0, f"  Category: {skill['category']}")
-            
-            status_item = QTreeWidgetItem(skill_item)
-            status_item.setText(0, f"  Status: {skill['status']}")
+    def refresh(self):
+        """Rebuild the tree from the SkillRegistry."""
+        self.tree.clear()
+        for name, skill in self._skill_reg.all_skills().items():
+            meta = skill.get("meta", {})
+            description = meta.get("description", "")
+            self.add_skill(name, description)
     
     def _on_item_clicked(self, item, column):
         """Handle item selection"""
@@ -90,13 +79,6 @@ class SkillTree(QWidget):
         
         menu = QMenu(self)
         
-        # Configure action
-        config_action = QAction("Configure", self)
-        config_action.triggered.connect(lambda: self._configure_skill(item))
-        menu.addAction(config_action)
-        
-        menu.addSeparator()
-        
         # Remove action
         remove_action = QAction("Remove", self)
         remove_action.triggered.connect(lambda: self._remove_skill(item))
@@ -104,31 +86,32 @@ class SkillTree(QWidget):
         
         menu.exec_(self.tree.viewport().mapToGlobal(position))
     
-    def _configure_skill(self, item):
-        """Configure skill"""
-        skill_name = item.data(0, Qt.UserRole)
-        if skill_name:
-            self.skill_configure_requested.emit(skill_name)
-    
     def _remove_skill(self, item):
         """Remove skill"""
         skill_name = item.data(0, Qt.UserRole)
         if skill_name:
             self.skill_remove_requested.emit(skill_name)
     
-    def add_skill(self, name: str, category: str, status: str = "enabled"):
+    def add_skill(self, name: str, description: str = ""):
         """Add a skill to the tree"""
         skill_item = QTreeWidgetItem(self.tree)
-        status_icon = "✓" if status == "enabled" else "✗"
-        skill_item.setText(0, f"{status_icon} {name}")
+        skill_item.setText(0, f"⚡ {name}")
         skill_item.setData(0, Qt.UserRole, name)
         
-        # Add details
-        category_item = QTreeWidgetItem(skill_item)
-        category_item.setText(0, f"  Category: {category}")
-        
-        status_item = QTreeWidgetItem(skill_item)
-        status_item.setText(0, f"  Status: {status}")
+        # Add description as child (unwrap to single line, tooltip for full text)
+        if description:
+            one_line = " ".join(description.splitlines())
+            desc_item = QTreeWidgetItem(skill_item)
+            desc_item.setText(0, f"  {one_line}")
+            desc_item.setToolTip(0, description)
+
+    def remove_skill(self, name: str):
+        """Remove a skill from the tree by name."""
+        for i in range(self.tree.topLevelItemCount()):
+            item = self.tree.topLevelItem(i)
+            if item and item.data(0, Qt.UserRole) == name:
+                self.tree.takeTopLevelItem(i)
+                return
     
     def clear_skills(self):
         """Clear all skills"""

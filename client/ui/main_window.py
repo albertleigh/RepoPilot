@@ -3,7 +3,7 @@ Main Window for RepoCode Application
 Zeal-like interface with menu, search, side panels, and chat tabs
 """
 from PySide6.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QSplitter, QMessageBox
+    QMainWindow, QWidget, QVBoxLayout, QSplitter, QMessageBox, QFileDialog
 )
 from PySide6.QtCore import Qt
 
@@ -100,6 +100,10 @@ class MainWindow(QMainWindow):
         self.left_panel.llm_tree.llm_add_requested.connect(self.on_add_llm)
         self.left_panel.llm_tree.llm_remove_requested.connect(self.on_remove_llm)
         self.left_panel.llm_tree.llm_configure_requested.connect(self.on_configure_llm)
+
+        # Skill tree signals
+        self.left_panel.skill_tree.skill_add_requested.connect(self.on_add_skill)
+        self.left_panel.skill_tree.skill_remove_requested.connect(self.on_remove_skill)
     
     # Menu handlers
     def on_add_tab(self):
@@ -223,3 +227,32 @@ class MainWindow(QMainWindow):
     def _on_llm_updated(self, display_name: str):
         """Callback when an LLM client is updated via the dialog."""
         self.statusBar().showMessage(f"LLM client '{display_name}' updated")
+
+    # Skill handlers
+    def on_add_skill(self):
+        """Handle add skill – open a file picker for SKILL.md."""
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select SKILL.md", "", "Skill files (SKILL.md)"
+        )
+        if not path:
+            return
+        from pathlib import Path
+        ok, msg = self.ctx.skill_registry.register(Path(path))
+        if ok:
+            self.left_panel.skill_tree.refresh()
+            self.statusBar().showMessage(f"Skill '{msg}' added")
+        else:
+            QMessageBox.warning(self, "Invalid Skill", msg)
+
+    def on_remove_skill(self, skill_name: str):
+        """Handle remove skill."""
+        reply = QMessageBox.question(
+            self,
+            "Remove Skill",
+            f"Remove skill: {skill_name}?",
+            QMessageBox.Yes | QMessageBox.No,
+        )
+        if reply == QMessageBox.Yes:
+            self.ctx.skill_registry.unregister(skill_name)
+            self.left_panel.skill_tree.remove_skill(skill_name)
+            self.statusBar().showMessage(f"Skill removed: {skill_name}")

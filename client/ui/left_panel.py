@@ -65,7 +65,10 @@ class LeftPanel(QWidget):
             action_button_text="+",
             action_button_tooltip="Add skill"
         )
-        self.skill_tree = SkillTree(show_header=False)
+        self.skill_tree = SkillTree(
+            skill_registry=self.ctx.skill_registry,
+            show_header=False,
+        )
         self.skill_section.set_content(self.skill_tree)
         
         # Connect action button to add skill
