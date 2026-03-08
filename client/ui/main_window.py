@@ -139,7 +139,7 @@ class MainWindow(QMainWindow):
             "About RepoCode",
             "<h3>RepoCode</h3>"
             "<p>Version 1.0.0</p>"
-            "<p>A Zeal-like repository documentation and chat interface.</p>"
+            "<p>A Zeal-like repository documentation and code and chat interface.</p>"
             "<p>Powered by Qt and Python.</p>"
         )
     
