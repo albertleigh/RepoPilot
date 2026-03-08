@@ -117,7 +117,9 @@ def main():
         _bind_reload_shortcut(state)
 
     window.show()
-    sys.exit(app.exec())
+    exit_code = app.exec()
+    ctx.shutdown()
+    sys.exit(exit_code)
 
 if __name__ == "__main__":
     main()

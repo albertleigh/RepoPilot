@@ -52,6 +52,15 @@ class AppContext:
         self.engineer_manager_registry = EngineerManagerRegistry()
 
     # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
+
+    def shutdown(self) -> None:
+        """Tear down long-lived resources (call before exit)."""
+        self.engineer_manager_registry.shutdown_all()
+        self.event_bus.shutdown()
+
+    # ------------------------------------------------------------------
     # Provider auto-registration
     # ------------------------------------------------------------------
 
