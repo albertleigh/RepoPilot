@@ -24,7 +24,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.ctx = ctx
         self.current_repo = None
-        self.current_llm = None
+        self.current_llm = ctx.llm_client_registry.selected_name()
         self.init_ui()
         self.connect_signals()
     
@@ -189,6 +189,8 @@ class MainWindow(QMainWindow):
     def on_llm_selected(self, llm_name: str):
         """Handle LLM selection"""
         self.current_llm = llm_name
+        self.ctx.llm_client_registry.select(llm_name)
+        self.left_panel.llm_tree.refresh()
         self.statusBar().showMessage(f"LLM selected: {llm_name}")
     
     def on_add_llm(self):
@@ -199,8 +201,8 @@ class MainWindow(QMainWindow):
 
     def _on_llm_created(self, display_name: str, provider: str):
         """Callback when a new LLM client is created via the dialog."""
-        self.left_panel.llm_tree.add_llm(display_name, provider, status="active")
-        self.current_llm = display_name
+        self.current_llm = self.ctx.llm_client_registry.selected_name()
+        self.left_panel.llm_tree.refresh()
         self.statusBar().showMessage(f"LLM client '{display_name}' added")
     
     def on_remove_llm(self, llm_name: str):
@@ -213,9 +215,8 @@ class MainWindow(QMainWindow):
         )
         if reply == QMessageBox.Yes:
             self.ctx.llm_client_registry.unregister(llm_name)
-            self.left_panel.llm_tree.remove_llm(llm_name)
-            if self.current_llm == llm_name:
-                self.current_llm = None
+            self.current_llm = self.ctx.llm_client_registry.selected_name()
+            self.left_panel.llm_tree.refresh()
             self.statusBar().showMessage(f"LLM client removed: {llm_name}")
     
     def on_configure_llm(self, llm_name: str):

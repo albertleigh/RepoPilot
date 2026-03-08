@@ -123,6 +123,7 @@ class LLMProviderRegistry:
 _log = logging.getLogger(__name__)
 
 _LLM_CLIENTS_FILE = "llm_clients.json"
+_LLM_SELECTED_FILE = "llm_selected.json"
 
 
 class LLMClientRegistry:
@@ -145,6 +146,7 @@ class LLMClientRegistry:
     ):
         self._clients: dict[str, LLMClient] = {}
         self._configs: dict[str, dict] = {}  # name → {"provider", "fields"}
+        self._selected: str | None = None
         self._base_dir = base_dir
         self._provider_registry = provider_registry
 
@@ -153,6 +155,12 @@ class LLMClientRegistry:
         if self._base_dir is None:
             return None
         return self._base_dir / _LLM_CLIENTS_FILE
+
+    @property
+    def _selected_path(self) -> Path | None:
+        if self._base_dir is None:
+            return None
+        return self._base_dir / _LLM_SELECTED_FILE
 
     # ------------------------------------------------------------------
     # CRUD
@@ -168,6 +176,9 @@ class LLMClientRegistry:
         self._clients[name] = client
         if config is not None:
             self._configs[name] = config
+        if self._selected is None:
+            self._selected = name
+            self._save_selected()
         self._save()
 
     def update(self, name: str, client: LLMClient,
@@ -181,6 +192,9 @@ class LLMClientRegistry:
     def unregister(self, name: str) -> None:
         self._clients.pop(name, None)
         self._configs.pop(name, None)
+        if self._selected == name:
+            self._selected = None
+            self._save_selected()
         self._save()
 
     def get(self, name: str) -> LLMClient | None:
@@ -209,6 +223,25 @@ class LLMClientRegistry:
         return f"{provider_name} {n}"
 
     # ------------------------------------------------------------------
+    # Selection
+    # ------------------------------------------------------------------
+
+    def select(self, name: str | None) -> None:
+        """Set the currently selected LLM client and persist the choice."""
+        self._selected = name
+        self._save_selected()
+
+    def selected_name(self) -> str | None:
+        """Return the display name of the currently selected client."""
+        return self._selected
+
+    def selected_client(self) -> LLMClient | None:
+        """Return the live client instance for the current selection."""
+        if self._selected is None:
+            return None
+        return self._clients.get(self._selected)
+
+    # ------------------------------------------------------------------
     # Persistence
     # ------------------------------------------------------------------
 
@@ -225,6 +258,33 @@ class LLMClientRegistry:
             )
         except OSError:
             _log.exception("Failed to save LLM client configs to %s", path)
+
+    def _save_selected(self) -> None:
+        """Write the selected client name to ``llm_selected.json``."""
+        path = self._selected_path
+        if path is None:
+            return
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(
+                json.dumps({"selected": self._selected}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+        except OSError:
+            _log.exception("Failed to save selected LLM to %s", path)
+
+    def _load_selected(self) -> None:
+        """Read the selected client name from ``llm_selected.json``."""
+        path = self._selected_path
+        if path is None or not path.exists():
+            return
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            name = raw.get("selected")
+            if name and name in self._clients:
+                self._selected = name
+        except (OSError, json.JSONDecodeError):
+            _log.exception("Failed to read selected LLM from %s", path)
 
     def load(self) -> None:
         """Load persisted client configs from disk and reconstruct live
@@ -255,3 +315,5 @@ class LLMClientRegistry:
                 self._configs[name] = cfg
             except Exception:
                 _log.exception("Failed to reconstruct client %r", name)
+
+        self._load_selected()
