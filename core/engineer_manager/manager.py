@@ -4,6 +4,25 @@ EngineerManager – autonomous agent loop bound to a single git repo.
 Each instance owns isolated sub-services and runs in a dedicated daemon
 thread.  The UI communicates with it via a thread-safe
 :class:`queue.Queue`.
+
+Wake protocol
+-------------
+While the agent is **IDLE** (waiting for work), the loop blocks on an
+internal ``threading.Event`` (``_wake``).  Any thread that enqueues work
+must call :meth:`wake` (or use :meth:`send_message`, which does so
+automatically) so the loop unblocks and processes the new input.
+
+When to call :meth:`wake`:
+
+* After pushing a user message via :meth:`send_message` – handled
+  automatically.
+* After injecting synthetic messages into ``_inbox`` from an external
+  coordination layer.
+* From background-manager drain callbacks or teammate completions
+  that should prompt the lead agent to re-enter its tool loop.
+
+:meth:`wake` is a no-op when the agent is already RUNNING, so it is
+always safe to call.
 """
 from __future__ import annotations
 
@@ -84,6 +103,7 @@ class EngineerManager:
         self._inbox: Queue[str] = Queue()  # user → agent
         self._outbox: Queue[dict] = Queue()  # agent → UI
         self._stop = threading.Event()
+        self._wake = threading.Event()      # set to unblock idle loop
         self._thread: threading.Thread | None = None
 
         # -- conversation history --
@@ -216,9 +236,15 @@ class EngineerManager:
         msgs = self._messages
 
         while not self._stop.is_set():
-            # --- wait for next user message ---
+            # --- block until woken (no busy-wait) ---
+            self._wake.wait()
+            if self._stop.is_set():
+                break
+            self._wake.clear()
+
+            # --- drain all queued messages ---
             try:
-                user_text = self._inbox.get(timeout=1)
+                user_text = self._inbox.get_nowait()
             except Empty:
                 continue
 
@@ -326,8 +352,24 @@ class EngineerManager:
         self._thread.start()
 
     def send_message(self, text: str) -> None:
-        """Send a user message into the agent loop (thread-safe)."""
+        """Send a user message into the agent loop (thread-safe).
+
+        Automatically wakes the loop if it is idle.
+        """
         self._inbox.put(text)
+        self.wake()
+
+    def wake(self) -> None:
+        """Signal the agent loop to unblock and check for work.
+
+        Safe to call from any thread and at any time.  Has no effect
+        when the agent is already processing a request (RUNNING).
+        Use this after enqueuing work into ``_inbox`` from outside
+        :meth:`send_message`, or when external events (background
+        task completions, teammate messages) should prompt the lead
+        agent to re-enter its tool loop.
+        """
+        self._wake.set()
 
     def poll_events(self, timeout: float = 0) -> list[dict]:
         """Drain all pending events from the outbox.
@@ -345,6 +387,7 @@ class EngineerManager:
     def shutdown(self) -> None:
         """Signal the loop to stop and wait for the thread to finish."""
         self._stop.set()
+        self._wake.set()  # unblock if waiting
         if self._thread:
             self._thread.join(timeout=5)
             self._thread = None
