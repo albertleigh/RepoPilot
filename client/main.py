@@ -23,9 +23,9 @@ def reload_app(state):
 
     # Reload modules
     from ui import main_window as mw_module
-    from ui import menu_bar, search_bar, left_panel, chat_tab_widget
+    from ui import menu_bar, search_bar, left_panel, tabs_manager
     from ui.left_panel_components import repo_tree, llm_tree, collapsible_section
-    from ui.chat_tab_components import chat_tab, welcome_tab
+    from ui.tabs_item import chat_tab, welcome_tab
 
     importlib.reload(collapsible_section)
     importlib.reload(repo_tree)
@@ -33,7 +33,7 @@ def reload_app(state):
     importlib.reload(left_panel)
     importlib.reload(chat_tab)
     importlib.reload(welcome_tab)
-    importlib.reload(chat_tab_widget)
+    importlib.reload(tabs_manager)
     importlib.reload(search_bar)
     importlib.reload(menu_bar)
     importlib.reload(mw_module)

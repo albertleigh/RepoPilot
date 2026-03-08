@@ -13,7 +13,7 @@ from core.services import get_data_service
 from .menu_bar import AppMenuBar
 from .search_bar import SearchBar
 from .left_panel import LeftPanel
-from .chat_tab_widget import ChatTabWidget
+from .tabs_manager import TabsManager
 
 
 class MainWindow(QMainWindow):
@@ -57,7 +57,7 @@ class MainWindow(QMainWindow):
         self.main_splitter.addWidget(self.left_panel)
         
         # Right panel (wide) - chat tabs
-        self.chat_tabs = ChatTabWidget()
+        self.chat_tabs = TabsManager()
         self.main_splitter.addWidget(self.chat_tabs)
         
         # Set initial sizes: 20% left, 80% right
