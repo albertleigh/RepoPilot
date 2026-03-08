@@ -7,6 +7,7 @@ import os
 import importlib
 from PySide6.QtWidgets import QApplication
 from PySide6.QtGui import QKeySequence, QShortcut
+from core.context import AppContext
 from ui.main_window import MainWindow
 
 
@@ -40,7 +41,7 @@ def reload_app(state):
 
     # Close old and create new
     state['window'].close()
-    new_window = mw_module.MainWindow()
+    new_window = mw_module.MainWindow(state['ctx'])
     new_window.setGeometry(geometry)
     new_window.show()
 
@@ -54,12 +55,15 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName("Repo Wiki App")
     
-    window = MainWindow()
+    # -- Dependency injection context --
+    ctx = AppContext()
+
+    window = MainWindow(ctx)
 
     # Add Ctrl+R shortcut for hot reload (only in development mode)
     if os.getenv('REPOCODE_DEV', '').lower() in ('1', 'true', 'yes'):
         print("🔥 Hot reload enabled - Press Ctrl+R to reload UI changes")
-        state = {'window': window}
+        state = {'window': window, 'ctx': ctx}
         _bind_reload_shortcut(state)
 
     window.show()

@@ -3,3 +3,7 @@ PySide6>=6.6.0
 
 # Additional Qt tools
 PySide6-Addons>=6.6.0
+
+# LLM API Clients
+anthropic>=0.25.0
+openai>=2.26.0

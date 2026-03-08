@@ -4,6 +4,7 @@ Combines repository and LLM client tree views
 """
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QSplitter
 from PySide6.QtCore import Qt, Signal
+from core.context import AppContext
 from .left_panel_components import RepoTree, LLMTree, SkillTree, MCPTree, CollapsibleSection
 
 
@@ -16,8 +17,9 @@ class LeftPanel(QWidget):
     skill_selected = Signal(str)
     mcp_selected = Signal(str)
     
-    def __init__(self, parent=None):
+    def __init__(self, ctx: AppContext, parent=None):
         super().__init__(parent)
+        self.ctx = ctx
         self.setup_ui()
         self._connect_signals()
     
@@ -42,7 +44,10 @@ class LeftPanel(QWidget):
             action_button_text="+",
             action_button_tooltip="Add LLM client"
         )
-        self.llm_tree = LLMTree(show_header=False)  # No header since CollapsibleSection has it
+        self.llm_tree = LLMTree(
+            client_registry=self.ctx.llm_client_registry,
+            show_header=False,
+        )
         self.llm_section.set_content(self.llm_tree)
 
         # Connect action button to add LLM

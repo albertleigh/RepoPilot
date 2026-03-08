@@ -9,6 +9,8 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Signal, Qt
 from PySide6.QtGui import QAction
 
+from core.LLMClients.base import LLMClientRegistry
+
 
 class LLMTree(QWidget):
     """LLM clients tree widget with management controls"""
@@ -19,11 +21,13 @@ class LLMTree(QWidget):
     llm_remove_requested = Signal(str)
     llm_configure_requested = Signal(str)
     
-    def __init__(self, show_header: bool = True, parent=None):
+    def __init__(self, client_registry: LLMClientRegistry,
+                 show_header: bool = True, parent=None):
         super().__init__(parent)
+        self._client_reg = client_registry
         self.show_header = show_header
         self.setup_ui()
-        self._load_dummy_data()
+        self.refresh()
     
     def setup_ui(self):
         """Create LLM clients tree UI"""
@@ -54,27 +58,11 @@ class LLMTree(QWidget):
         self.tree.itemClicked.connect(self._on_item_clicked)
         layout.addWidget(self.tree)
     
-    def _load_dummy_data(self):
-        """Load dummy LLM client data"""
-        llm_clients = [
-            {"name": "OpenAI GPT-4", "type": "OpenAI", "status": "active"},
-            {"name": "Claude 3.5 Sonnet", "type": "Anthropic", "status": "active"},
-            {"name": "Local LLaMA", "type": "Local", "status": "inactive"},
-            {"name": "Gemini Pro", "type": "Google", "status": "active"},
-        ]
-        
-        for client in llm_clients:
-            client_item = QTreeWidgetItem(self.tree)
-            status_icon = "🟢" if client['status'] == "active" else "🔴"
-            client_item.setText(0, f"{status_icon} {client['name']}")
-            client_item.setData(0, Qt.UserRole, client['name'])
-            
-            # Add details as child items
-            type_item = QTreeWidgetItem(client_item)
-            type_item.setText(0, f"  Type: {client['type']}")
-            
-            status_item = QTreeWidgetItem(client_item)
-            status_item.setText(0, f"  Status: {client['status']}")
+    def refresh(self):
+        """Rebuild the tree from the LLMClientRegistry."""
+        self.tree.clear()
+        for name, client in self._client_reg.all_clients().items():
+            self.add_llm(name, client.provider_name(), status="active")
     
     def _on_item_clicked(self, item, column):
         """Handle item selection"""
@@ -130,6 +118,14 @@ class LLMTree(QWidget):
         status_item = QTreeWidgetItem(client_item)
         status_item.setText(0, f"  Status: {status}")
     
+    def remove_llm(self, name: str):
+        """Remove an LLM client from the tree by display name."""
+        for i in range(self.tree.topLevelItemCount()):
+            item = self.tree.topLevelItem(i)
+            if item and item.data(0, Qt.UserRole) == name:
+                self.tree.takeTopLevelItem(i)
+                return
+
     def clear_llms(self):
         """Clear all LLM clients"""
         self.tree.clear()

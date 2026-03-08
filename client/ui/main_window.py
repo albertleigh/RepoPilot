@@ -7,21 +7,22 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt
 
-from core.services import get_data_service
+from core.context import AppContext
 
 # Import UI components
 from .menu_bar import AppMenuBar
 from .search_bar import SearchBar
 from .left_panel import LeftPanel
 from .tabs_manager import TabsManager
+from .llm import CreateLLMDialog, ConfigureLLMDialog
 
 
 class MainWindow(QMainWindow):
     """Main application window with Zeal-like layout"""
 
-    def __init__(self):
+    def __init__(self, ctx: AppContext):
         super().__init__()
-        self.data_service = get_data_service()
+        self.ctx = ctx
         self.current_repo = None
         self.current_llm = None
         self.init_ui()
@@ -53,7 +54,7 @@ class MainWindow(QMainWindow):
         self.main_splitter = QSplitter(Qt.Horizontal)
         
         # Left panel (thin) - repos and LLM trees
-        self.left_panel = LeftPanel()
+        self.left_panel = LeftPanel(self.ctx)
         self.main_splitter.addWidget(self.left_panel)
         
         # Right panel (wide) - chat tabs
@@ -187,8 +188,16 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"LLM selected: {llm_name}")
     
     def on_add_llm(self):
-        """Handle add LLM"""
-        QMessageBox.information(self, "Add LLM Client", "Add LLM client dialog - To be implemented")
+        """Handle add LLM – open the creation dialog"""
+        dialog = CreateLLMDialog(self.ctx, parent=self)
+        dialog.llm_created.connect(self._on_llm_created)
+        dialog.exec()
+
+    def _on_llm_created(self, display_name: str, provider: str):
+        """Callback when a new LLM client is created via the dialog."""
+        self.left_panel.llm_tree.add_llm(display_name, provider, status="active")
+        self.current_llm = display_name
+        self.statusBar().showMessage(f"LLM client '{display_name}' added")
     
     def on_remove_llm(self, llm_name: str):
         """Handle remove LLM"""
@@ -199,12 +208,18 @@ class MainWindow(QMainWindow):
             QMessageBox.Yes | QMessageBox.No
         )
         if reply == QMessageBox.Yes:
+            self.ctx.llm_client_registry.unregister(llm_name)
+            self.left_panel.llm_tree.remove_llm(llm_name)
+            if self.current_llm == llm_name:
+                self.current_llm = None
             self.statusBar().showMessage(f"LLM client removed: {llm_name}")
     
     def on_configure_llm(self, llm_name: str):
-        """Handle configure LLM"""
-        QMessageBox.information(
-            self,
-            "Configure LLM",
-            f"Configuration for: {llm_name}\n\nTo be implemented"
-        )
+        """Handle configure LLM – open the configuration dialog."""
+        dialog = ConfigureLLMDialog(self.ctx, llm_name, parent=self)
+        dialog.llm_updated.connect(self._on_llm_updated)
+        dialog.exec()
+
+    def _on_llm_updated(self, display_name: str):
+        """Callback when an LLM client is updated via the dialog."""
+        self.statusBar().showMessage(f"LLM client '{display_name}' updated")
