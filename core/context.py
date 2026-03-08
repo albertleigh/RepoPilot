@@ -10,6 +10,7 @@ import os
 import platform
 from pathlib import Path
 
+from .events import EventBus
 from .LLMClients.base import LLMClientRegistry, LLMProviderRegistry
 from .engineer_manager.registry import EngineerManagerRegistry
 from .skills.skill_registry import SkillRegistry
@@ -31,6 +32,8 @@ class AppContext:
     def __init__(self, base_dir: Path | None = None) -> None:
         self.base_dir = base_dir or _default_base_dir()
         self.base_dir.mkdir(parents=True, exist_ok=True)
+
+        self.event_bus = EventBus()
 
         self.llm_provider_registry = LLMProviderRegistry()
         self._register_default_providers()
