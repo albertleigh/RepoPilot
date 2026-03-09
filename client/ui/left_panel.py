@@ -34,7 +34,10 @@ class LeftPanel(QWidget):
         self.splitter.setHandleWidth(4)  # Make splitter handle more visible
         
         # Repository tree (top)
-        self.repo_tree = RepoTree()
+        self.repo_tree = RepoTree(
+            repo_registry=self.ctx.repo_registry,
+            engineer_registry=self.ctx.engineer_manager_registry,
+        )
         self.splitter.addWidget(self.repo_tree)
 
         # LLM tree section (bottom) - collapsible

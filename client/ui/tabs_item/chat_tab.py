@@ -3,19 +3,22 @@ Chat Tab Component
 Individual chat conversation tab with message history and input
 """
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QTextEdit,
-    QPushButton, QLabel, QLineEdit, QSplitter
+    QVBoxLayout, QHBoxLayout, QTextEdit,
+    QPushButton, QLabel, QWidget,
 )
-from PySide6.QtCore import Signal, Qt
+from PySide6.QtCore import Signal
 from datetime import datetime
 
+from .base_tab import BaseTab
 
-class ChatTab(QWidget):
+
+class ChatTab(BaseTab):
     """Individual chat conversation tab"""
     
     # Signals
     message_sent = Signal(str)  # Emits user message
-    tab_close_requested = Signal()
+
+    tab_icon = "\U0001F4AC"  # 💬
     
     def __init__(self, repo_name: str = "Unknown", llm_name: str = "Default LLM", parent=None):
         super().__init__(parent)

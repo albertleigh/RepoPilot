@@ -27,7 +27,7 @@ from PySide6.QtWidgets import QWidget, QVBoxLayout, QSplitter, QApplication
 from PySide6.QtCore import Signal, Qt
 
 from client.ui.tabs_manager.grid_item_container import GridItemContainer, DropZone
-from client.ui.tabs_item import ChatTab, WelcomeTab
+from client.ui.tabs_item import BaseTab, WelcomeTab
 
 
 class TabsManager(QWidget):
@@ -256,20 +256,43 @@ class TabsManager(QWidget):
     # Public API  (compatible with old ChatTabWidget)
     # ------------------------------------------------------------------
 
-    def add_chat_tab(self, repo_name: str = "New Repository",
-                     llm_name: str = "Default LLM"):
-        chat_tab = ChatTab(repo_name=repo_name, llm_name=llm_name)
-        chat_tab.message_sent.connect(
-            lambda msg, ct=chat_tab: self._handle_message(msg, ct))
+    def add_tab(self, tab: BaseTab) -> BaseTab:
+        """Add a :class:`BaseTab` to the active container.
 
+        The tab's :meth:`~BaseTab.tab_label` is used as the title shown
+        in the tab bar.  Returns the same *tab* for convenience.
+        """
         container = self._containers.get(self._active_container_id)
         if container is None:
             container = self._get_first_container()
         if container:
-            container.add_tab(chat_tab, f"\U0001F4AC {chat_tab.get_tab_title()}")
+            container.add_tab(tab, tab.tab_label())
             self._active_container_id = container.container_id
+        return tab
 
-        return chat_tab
+    def find_tab(self, tab_type: type, predicate=None) -> BaseTab | None:
+        """Find the first open tab matching *tab_type* and optional *predicate*.
+
+        *predicate* is an optional callable ``(tab) -> bool``.
+        Returns ``None`` when no match is found.
+        """
+        for c in self._containers.values():
+            for i in range(c.tab_count()):
+                w = c.tab_widget.widget(i)
+                if isinstance(w, tab_type):
+                    if predicate is None or predicate(w):
+                        return w
+        return None
+
+    def focus_tab(self, tab: BaseTab) -> bool:
+        """Bring an existing *tab* into focus.  Returns ``True`` on success."""
+        for c in self._containers.values():
+            for i in range(c.tab_count()):
+                if c.tab_widget.widget(i) is tab:
+                    c.tab_widget.setCurrentIndex(i)
+                    self._active_container_id = c.container_id
+                    return True
+        return False
 
     def close_current_tab(self):
         container = self._containers.get(self._active_container_id)
@@ -278,31 +301,28 @@ class TabsManager(QWidget):
         if container and container.current_index() >= 0:
             container._on_tab_close(container.current_index())
 
-    def _handle_message(self, message: str, chat_tab: ChatTab):
-        pass
-
-    def get_current_chat_tab(self) -> ChatTab | None:
+    def get_current_tab(self) -> BaseTab | None:
+        """Return the active tab widget, or ``None``."""
         container = self._containers.get(self._active_container_id)
         if container:
             w = container.current_widget()
-            if isinstance(w, ChatTab):
-                return w
-        for c in self._containers.values():
-            w = c.current_widget()
-            if isinstance(w, ChatTab):
+            if isinstance(w, BaseTab):
                 return w
         return None
 
-    def get_all_chat_tabs(self) -> list:
-        tabs = []
+    def get_all_tabs(self, tab_type: type | None = None) -> list[BaseTab]:
+        """Return all open tabs, optionally filtered by *tab_type*."""
+        tabs: list[BaseTab] = []
         for c in self._containers.values():
             for i in range(c.tab_count()):
                 w = c.tab_widget.widget(i)
-                if isinstance(w, ChatTab):
-                    tabs.append(w)
+                if isinstance(w, BaseTab):
+                    if tab_type is None or isinstance(w, tab_type):
+                        tabs.append(w)
         return tabs
 
     def _add_welcome_tab(self):
         container = self._get_first_container()
         if container:
-            container.add_tab(WelcomeTab(), "\U0001F3E0 Welcome")
+            tab = WelcomeTab()
+            container.add_tab(tab, tab.tab_label())

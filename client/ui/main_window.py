@@ -2,14 +2,19 @@
 Main Window for RepoCode Application
 Zeal-like interface with menu, search, side panels, and chat tabs
 """
+from pathlib import Path
+
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QSplitter, QMessageBox, QFileDialog
 )
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QKeySequence, QShortcut
 
 from core.context import AppContext
+from core.events import Event, EventKind
 
 # Import UI components
+from .event_bridge import QtEventBridge
 from .menu_bar import AppMenuBar
 from .search_bar import SearchBar
 from .left_panel import LeftPanel
@@ -25,8 +30,13 @@ class MainWindow(QMainWindow):
         self.ctx = ctx
         self.current_repo = None
         self.current_llm = ctx.llm_client_registry.selected_name()
+
+        # Event bridge: delivers EventBus events on the Qt main thread
+        self._event_bridge = QtEventBridge(ctx.event_bus, parent=self)
+
         self.init_ui()
         self.connect_signals()
+        self._init_debug_panel()
     
     def init_ui(self):
         """Initialize the main UI"""
@@ -67,7 +77,13 @@ class MainWindow(QMainWindow):
         self.main_splitter.setStretchFactor(1, 1)  # Right panel stretches
         
         main_layout.addWidget(self.main_splitter, 1)  # stretch factor 1 = expands to fill space
-        
+
+        # Debug panel placeholder — inserted below main_splitter, hidden by default
+        self._debug_panel = None
+        self._debug_container = QWidget()
+        self._debug_container.hide()
+        main_layout.addWidget(self._debug_container, 0)
+
         # Status bar
         self.statusBar().showMessage("Ready")
     
@@ -95,6 +111,15 @@ class MainWindow(QMainWindow):
         self.left_panel.repo_tree.repo_add_requested.connect(self.on_add_repo)
         self.left_panel.repo_tree.repo_remove_requested.connect(self.on_remove_repo)
         self.left_panel.repo_tree.repo_refresh_requested.connect(self.on_refresh_repo)
+        self.left_panel.repo_tree.repo_start_engineer.connect(self.on_start_engineer)
+        self.left_panel.repo_tree.repo_stop_engineer.connect(self.on_stop_engineer)
+        self.left_panel.repo_tree.repo_open_chat.connect(self.on_open_engineer_chat)
+
+        # Refresh tree icon when an engineer starts or stops
+        self._event_bridge.on(
+            {EventKind.ENGINEER_STARTED, EventKind.ENGINEER_STOPPED},
+            self._on_engineer_lifecycle,
+        )
         
         # LLM tree signals
         self.left_panel.llm_tree.llm_add_requested.connect(self.on_add_llm)
@@ -104,13 +129,92 @@ class MainWindow(QMainWindow):
         # Skill tree signals
         self.left_panel.skill_tree.skill_add_requested.connect(self.on_add_skill)
         self.left_panel.skill_tree.skill_remove_requested.connect(self.on_remove_skill)
-    
+
+    # ------------------------------------------------------------------
+    # Debug panel
+    # ------------------------------------------------------------------
+
+    def _init_debug_panel(self):
+        """Create the debug panel and bind F12 to toggle it."""
+        from .debug_panel import DebugPanel
+
+        layout = QVBoxLayout(self._debug_container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        self._debug_panel = DebugPanel(self.ctx, self, parent=self._debug_container)
+        layout.addWidget(self._debug_panel)
+
+        self._debug_panel.undock_requested.connect(self._toggle_debug_dock)
+
+        self._debug_window = None  # floating window when undocked
+
+        shortcut = QShortcut(QKeySequence(Qt.Key_F12), self)
+        shortcut.activated.connect(self.toggle_debug_panel)
+
+    def toggle_debug_panel(self):
+        """Show / hide the debug panel (docked or floating)."""
+        if self._debug_window is not None:
+            # Floating — close the window and re-dock (hidden)
+            self._dock_debug_panel()
+            return
+        if self._debug_container.isVisible():
+            self._debug_container.hide()
+        else:
+            self._debug_container.show()
+            self._debug_container.setMinimumHeight(250)
+            self._debug_container.setMaximumHeight(400)
+            self._debug_panel._refresh_services()
+            self._debug_panel._refresh_log_tail()
+
+    def _toggle_debug_dock(self):
+        """Pop the debug panel out to its own window, or dock it back."""
+        if self._debug_window is not None:
+            self._dock_debug_panel()
+        else:
+            self._undock_debug_panel()
+
+    def _undock_debug_panel(self):
+        """Move the debug panel into a free-floating window."""
+        from PySide6.QtWidgets import QVBoxLayout as _VBox
+
+        self._debug_container.hide()
+
+        self._debug_window = QWidget(None, Qt.Window)
+        self._debug_window.setWindowTitle("🛠️ Debug Tools")
+        self._debug_window.resize(900, 450)
+        lay = _VBox(self._debug_window)
+        lay.setContentsMargins(0, 0, 0, 0)
+
+        self._debug_panel.setParent(self._debug_window)
+        lay.addWidget(self._debug_panel)
+        self._debug_panel.set_popout_icon(True)
+        self._debug_panel.show()
+        self._debug_window.show()
+
+    def _dock_debug_panel(self):
+        """Return the debug panel to the docked container."""
+        if self._debug_window is not None:
+            self._debug_window.hide()
+
+        self._debug_panel.setParent(self._debug_container)
+        self._debug_container.layout().addWidget(self._debug_panel)
+        self._debug_panel.set_popout_icon(False)
+        self._debug_panel.show()
+        self._debug_container.show()
+        self._debug_container.setMinimumHeight(250)
+        self._debug_container.setMaximumHeight(400)
+
+        if self._debug_window is not None:
+            self._debug_window.deleteLater()
+            self._debug_window = None
+
     # Menu handlers
     def on_add_tab(self):
         """Add a new chat tab"""
+        from .tabs_item import ChatTab
         repo_name = self.current_repo if self.current_repo else "New Repository"
         llm_name = self.current_llm if self.current_llm else "Default LLM"
-        self.chat_tabs.add_chat_tab(repo_name=repo_name, llm_name=llm_name)
+        tab = ChatTab(repo_name=repo_name, llm_name=llm_name)
+        self.chat_tabs.add_tab(tab)
         self.statusBar().showMessage(f"New chat tab opened for {repo_name}")
     
     def on_close_tab(self):
@@ -166,24 +270,36 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"Repository selected: {repo_path}")
     
     def on_add_repo(self):
-        """Handle add repository"""
-        QMessageBox.information(self, "Add Repository", "Add repository dialog - To be implemented")
-    
-    def on_remove_repo(self, repo_path: str):
+        """Handle add repository – pick a folder and register it."""
+        folder = QFileDialog.getExistingDirectory(self, "Select Repository Root")
+        if not folder:
+            return
+        name = Path(folder).name
+        self.ctx.repo_registry.register(name, folder)
+        self.left_panel.repo_tree.refresh()
+        self.statusBar().showMessage(f"Repository added: {name}")
+
+    def on_remove_repo(self, repo_name: str):
         """Handle remove repository"""
         reply = QMessageBox.question(
             self,
             "Remove Repository",
-            f"Remove repository: {repo_path}?",
+            f"Remove repository: {repo_name}?",
             QMessageBox.Yes | QMessageBox.No
         )
         if reply == QMessageBox.Yes:
-            self.statusBar().showMessage(f"Repository removed: {repo_path}")
-    
-    def on_refresh_repo(self, repo_path: str):
+            # Stop engineer if running
+            path_str = self.ctx.repo_registry.get(repo_name)
+            if path_str:
+                self.ctx.engineer_manager_registry.remove(Path(path_str))
+            self.ctx.repo_registry.unregister(repo_name)
+            self.left_panel.repo_tree.refresh()
+            self.statusBar().showMessage(f"Repository removed: {repo_name}")
+
+    def on_refresh_repo(self, repo_name: str):
         """Handle refresh repository"""
-        self.statusBar().showMessage(f"Refreshing repository: {repo_path}")
-        # TODO: Implement actual refresh
+        self.left_panel.repo_tree.refresh()
+        self.statusBar().showMessage(f"Refreshed: {repo_name}")
     
     # LLM handlers
     def on_llm_selected(self, llm_name: str):
@@ -257,3 +373,80 @@ class MainWindow(QMainWindow):
             self.ctx.skill_registry.unregister(skill_name)
             self.left_panel.skill_tree.remove_skill(skill_name)
             self.statusBar().showMessage(f"Skill removed: {skill_name}")
+
+    # ------------------------------------------------------------------
+    # Engineer lifecycle handlers
+    # ------------------------------------------------------------------
+
+    def on_start_engineer(self, repo_name: str):
+        """Start an EngineerManager for *repo_name* and open its chat tab."""
+        path_str = self.ctx.repo_registry.get(repo_name)
+        if not path_str:
+            QMessageBox.warning(self, "Error", f"No path found for repo: {repo_name}")
+            return
+
+        workdir = Path(path_str)
+        if self.ctx.engineer_manager_registry.get(workdir) is not None:
+            self.statusBar().showMessage(f"Engineer already running for {repo_name}")
+            self.on_open_engineer_chat(repo_name)
+            return
+
+        llm_client = self.ctx.llm_client_registry.selected_client()
+        if llm_client is None:
+            QMessageBox.warning(
+                self, "No LLM selected",
+                "Please select an LLM client before starting the engineer.",
+            )
+            return
+
+        self.ctx.engineer_manager_registry.create(workdir, llm_client, auto_start=True)
+        self.left_panel.repo_tree.refresh()
+        self.on_open_engineer_chat(repo_name)
+        self.statusBar().showMessage(f"Engineer started for {repo_name}")
+
+    def on_stop_engineer(self, repo_name: str):
+        """Stop the EngineerManager for *repo_name*."""
+        path_str = self.ctx.repo_registry.get(repo_name)
+        if path_str:
+            self.ctx.engineer_manager_registry.remove(Path(path_str))
+        self.left_panel.repo_tree.refresh()
+        self.statusBar().showMessage(f"Engineer stopped for {repo_name}")
+
+    def on_open_engineer_chat(self, repo_name: str):
+        """Open (or focus) the EngineerChatTab for *repo_name*."""
+        from .tabs_item import EngineerChatTab
+
+        path_str = self.ctx.repo_registry.get(repo_name)
+        if not path_str:
+            return
+
+        # Re-use an existing tab or create a new one
+        tab = self.chat_tabs.find_tab(
+            EngineerChatTab, lambda t: t.repo_name == repo_name,
+        )
+        if tab is not None:
+            self.chat_tabs.focus_tab(tab)
+        else:
+            tab = EngineerChatTab(
+                repo_name=repo_name,
+                event_bus=self.ctx.event_bus,
+                workdir=path_str,
+            )
+            self.chat_tabs.add_tab(tab)
+
+        # Wire message_sent → EngineerManager.send_message
+        mgr = self.ctx.engineer_manager_registry.get(Path(path_str))
+        if mgr is not None:
+            try:
+                tab.message_sent.disconnect()
+            except RuntimeError:
+                pass
+            tab.message_sent.connect(mgr.send_message)
+
+    # ------------------------------------------------------------------
+    # Engineer lifecycle (tree refresh only)
+    # ------------------------------------------------------------------
+
+    def _on_engineer_lifecycle(self, event: Event):
+        """Refresh the repo tree when an engineer starts or stops."""
+        self.left_panel.repo_tree.refresh()

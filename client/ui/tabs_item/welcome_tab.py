@@ -2,16 +2,23 @@
 Welcome Tab Component
 Landing page shown when application starts or when all tabs are closed
 """
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QTextBrowser
+from PySide6.QtWidgets import QVBoxLayout, QTextBrowser
 from PySide6.QtCore import Qt
 
+from .base_tab import BaseTab
 
-class WelcomeTab(QWidget):
+
+class WelcomeTab(BaseTab):
     """Welcome/landing page widget without chat functionality"""
+
+    tab_icon = "\U0001F3E0"  # 🏠
     
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setup_ui()
+
+    def get_tab_title(self) -> str:
+        return "Welcome"
     
     def setup_ui(self):
         """Create welcome tab UI"""

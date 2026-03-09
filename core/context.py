@@ -13,6 +13,7 @@ from pathlib import Path
 from .events import EventBus
 from .LLMClients.base import LLMClientRegistry, LLMProviderRegistry
 from .engineer_manager.registry import EngineerManagerRegistry
+from .repo_registry import RepoRegistry
 from .skills.skill_registry import SkillRegistry
 
 
@@ -49,7 +50,12 @@ class AppContext:
         )
         self.skill_registry.load()
 
-        self.engineer_manager_registry = EngineerManagerRegistry()
+        self.repo_registry = RepoRegistry(base_dir=self.base_dir)
+        self.repo_registry.load()
+
+        self.engineer_manager_registry = EngineerManagerRegistry(
+            event_bus=self.event_bus,
+        )
 
     # ------------------------------------------------------------------
     # Lifecycle

@@ -17,7 +17,7 @@ from ui.main_window import MainWindow
 LOG_FORMAT = "%(asctime)s  %(levelname)-8s  [%(name)s]  %(message)s"
 LOG_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 LOG_MAX_BYTES = 5 * 1024 * 1024  # 5 MB per file
-LOG_BACKUP_COUNT = 5             # keep 5 rotated files
+LOG_BACKUP_COUNT = 5  # keep 5 rotated files
 
 
 def setup_logging(log_dir: Path) -> None:
@@ -65,25 +65,59 @@ def _bind_reload_shortcut(state):
 
 
 def reload_app(state):
-    """Reload all modules and recreate the main window"""
-    # Get the position and size before closing
+    """Reload all UI modules and recreate the main window.
+
+    Modules are reloaded bottom-up: leaf modules first, composites last.
+    """
     geometry = state['window'].geometry()
 
-    # Reload modules
+    # -- Import every UI module (for reload) --
+    from ui import event_bridge
+
+    # left_panel_components (leaves)
+    from ui.left_panel_components import (
+        collapsible_section, repo_tree, llm_tree, mcp_tree, skill_tree,
+    )
+    from ui import left_panel
+
+    # llm dialogs
+    from ui.llm import configure_llm_dialog, create_llm_dialog
+
+    # tabs_item (leaves → composites)
+    from ui.tabs_item import base_tab, chat_tab, welcome_tab, engineer_chat_tab
+
+    # tabs_manager (leaves → composites)
+    from ui.tabs_manager import grid_item_container
+    from ui.tabs_manager import manager as tabs_mgr_module
+
+    from ui import search_bar, menu_bar
+    from ui import debug_panel
     from ui import main_window as mw_module
-    from ui import menu_bar, search_bar, left_panel, tabs_manager
-    from ui.left_panel_components import repo_tree, llm_tree, collapsible_section
-    from ui.tabs_item import chat_tab, welcome_tab
+
+    # -- Reload in dependency order (leaves first) --
+    importlib.reload(event_bridge)
 
     importlib.reload(collapsible_section)
     importlib.reload(repo_tree)
     importlib.reload(llm_tree)
+    importlib.reload(mcp_tree)
+    importlib.reload(skill_tree)
     importlib.reload(left_panel)
+
+    importlib.reload(configure_llm_dialog)
+    importlib.reload(create_llm_dialog)
+
+    importlib.reload(base_tab)
     importlib.reload(chat_tab)
     importlib.reload(welcome_tab)
-    importlib.reload(tabs_manager)
+    importlib.reload(engineer_chat_tab)
+
+    importlib.reload(grid_item_container)
+    importlib.reload(tabs_mgr_module)
+
     importlib.reload(search_bar)
     importlib.reload(menu_bar)
+    importlib.reload(debug_panel)
     importlib.reload(mw_module)
 
     # Close old and create new
@@ -101,7 +135,7 @@ def reload_app(state):
 def main():
     app = QApplication(sys.argv)
     app.setApplicationName("Repo Wiki App")
-    
+
     # -- Dependency injection context --
     ctx = AppContext()
 
@@ -120,6 +154,7 @@ def main():
     exit_code = app.exec()
     ctx.shutdown()
     sys.exit(exit_code)
+
 
 if __name__ == "__main__":
     main()

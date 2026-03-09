@@ -45,6 +45,7 @@ class QtEventBridge(QObject):
         super().__init__(parent)
         self._bus = bus
         self._unsub = bus.subscribe(self._on_event)
+        self.destroyed.connect(self._destroyed)
 
     # ------------------------------------------------------------------
     # Internal
@@ -87,3 +88,7 @@ class QtEventBridge(QObject):
         if self._unsub is not None:
             self._unsub()
             self._unsub = None
+
+    def _destroyed(self) -> None:
+        """Slot connected to the Qt ``destroyed`` signal."""
+        self.close()

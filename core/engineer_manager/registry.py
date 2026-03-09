@@ -7,6 +7,7 @@ import logging
 from pathlib import Path
 
 from core.LLMClients.base import LLMClient
+from core.events import EventBus
 
 from .manager import EngineerManager
 
@@ -16,8 +17,9 @@ _log = logging.getLogger(__name__)
 class EngineerManagerRegistry:
     """Maps normalised repo paths to live :class:`EngineerManager` instances."""
 
-    def __init__(self) -> None:
+    def __init__(self, event_bus: EventBus | None = None) -> None:
         self._managers: dict[str, EngineerManager] = {}
+        self._event_bus = event_bus
 
     @staticmethod
     def _key(workdir: Path) -> str:
@@ -38,7 +40,11 @@ class EngineerManagerRegistry:
         key = self._key(workdir)
         if key in self._managers:
             raise ValueError(f"Manager already exists for {workdir}")
-        mgr = EngineerManager(workdir, llm_client, skills_dir=skills_dir)
+        mgr = EngineerManager(
+            workdir, llm_client,
+            skills_dir=skills_dir,
+            event_bus=self._event_bus,
+        )
         self._managers[key] = mgr
         if auto_start:
             mgr.start()

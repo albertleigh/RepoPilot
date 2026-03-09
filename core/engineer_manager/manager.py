@@ -36,6 +36,16 @@ from queue import Empty, Queue
 from typing import Any, Callable
 
 from core.LLMClients.base import LLMClient
+from core.events import (
+    EventBus,
+    EngineerErrorEvent,
+    EngineerMessageEvent,
+    EngineerStartedEvent,
+    EngineerStoppedEvent,
+    EngineerToolCallEvent,
+    EngineerToolResultEvent,
+    TodoUpdatedEvent,
+)
 
 from .background_manager import BackgroundManager
 from .base_tools import run_bash, run_edit, run_read, run_write
@@ -80,9 +90,11 @@ class EngineerManager:
         workdir: Path,
         llm_client: LLMClient,
         skills_dir: Path | None = None,
+        event_bus: EventBus | None = None,
     ) -> None:
         self.workdir = workdir.resolve()
         self._llm = llm_client
+        self._event_bus = event_bus
         self.status: Status = Status.IDLE
 
         # -- sub-services --
@@ -101,13 +113,16 @@ class EngineerManager:
 
         # -- thread plumbing --
         self._inbox: Queue[str] = Queue()  # user → agent
-        self._outbox: Queue[dict] = Queue()  # agent → UI
         self._stop = threading.Event()
         self._wake = threading.Event()      # set to unblock idle loop
         self._thread: threading.Thread | None = None
 
         # -- conversation history --
         self._messages: list[dict] = []
+
+        # -- UI event log (thread-safe) --
+        self._event_log: list = []
+        self._log_lock = threading.Lock()
 
         # -- tool dispatch map --
         self._handlers: dict[str, Callable[..., Any]] = self._build_handlers()
@@ -250,16 +265,19 @@ class EngineerManager:
 
             self.status = Status.RUNNING
             msgs.append({"role": "user", "content": user_text})
-            self._emit("status", "running")
+            self._emit_event(EngineerStartedEvent(workdir=str(self.workdir)))
 
             try:
                 self._run_tool_loop(msgs, rounds_without_todo)
             except Exception:
                 _log.exception("Agent loop error in %s", self.workdir)
-                self._emit("error", "Internal agent error – see logs.")
+                self._emit_event(EngineerErrorEvent(
+                    workdir=str(self.workdir),
+                    error="Internal agent error – see logs.",
+                ))
             finally:
                 self.status = Status.IDLE
-                self._emit("status", "idle")
+                self._emit_event(EngineerStoppedEvent(workdir=str(self.workdir)))
 
     def _run_tool_loop(self, msgs: list, rounds_without_todo: int) -> None:
         """Inner loop: LLM call → tool dispatch → repeat until end_turn."""
@@ -293,7 +311,9 @@ class EngineerManager:
             msgs.append(response.assistant_message)
 
             if response.text:
-                self._emit("assistant", response.text)
+                self._emit_event(EngineerMessageEvent(
+                    workdir=str(self.workdir), text=response.text,
+                ))
 
             if response.stop_reason != "tool_use":
                 break
@@ -312,6 +332,16 @@ class EngineerManager:
                     output = f"Error: {e}"
                 _log.debug("> %s: %s", tc.name, str(output)[:200])
                 results.append({"tool_use_id": tc.id, "output": str(output)})
+                self._emit_event(EngineerToolCallEvent(
+                    workdir=str(self.workdir),
+                    tool_name=tc.name,
+                    tool_input=tc.input,
+                ))
+                self._emit_event(EngineerToolResultEvent(
+                    workdir=str(self.workdir),
+                    tool_name=tc.name,
+                    output=str(output)[:2000],
+                ))
                 if tc.name == "TodoWrite":
                     used_todo = True
 
@@ -328,12 +358,15 @@ class EngineerManager:
                 msgs[:] = auto_compact(msgs, self._llm, self.workdir)
 
     # ------------------------------------------------------------------
-    # Output helpers
+    # Event helpers
     # ------------------------------------------------------------------
 
-    def _emit(self, kind: str, payload: Any) -> None:
-        """Push an event onto the outbox for the UI to consume."""
-        self._outbox.put({"kind": kind, "payload": payload})
+    def _emit_event(self, event: Any) -> None:
+        """Emit a typed event on the global bus (async, non-blocking)."""
+        with self._log_lock:
+            self._event_log.append(event)
+        if self._event_bus is not None:
+            self._event_bus.emit_async(event)
 
     # ------------------------------------------------------------------
     # Public API (thread-safe)
@@ -350,6 +383,11 @@ class EngineerManager:
             name=f"engineer-{self.workdir.name}",
         )
         self._thread.start()
+
+    def get_event_history(self) -> list:
+        """Return a copy of all events emitted so far (thread-safe)."""
+        with self._log_lock:
+            return list(self._event_log)
 
     def send_message(self, text: str) -> None:
         """Send a user message into the agent loop (thread-safe).
@@ -370,19 +408,6 @@ class EngineerManager:
         agent to re-enter its tool loop.
         """
         self._wake.set()
-
-    def poll_events(self, timeout: float = 0) -> list[dict]:
-        """Drain all pending events from the outbox.
-
-        Returns a (possibly empty) list of ``{kind, payload}`` dicts.
-        """
-        events: list[dict] = []
-        while True:
-            try:
-                events.append(self._outbox.get_nowait())
-            except Empty:
-                break
-        return events
 
     def shutdown(self) -> None:
         """Signal the loop to stop and wait for the thread to finish."""
