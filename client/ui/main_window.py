@@ -399,6 +399,10 @@ class MainWindow(QMainWindow):
             )
             return
 
+        # Sync global skills into the repo before starting the agent
+        from core.skills.utils import sync_skills_to_repo
+        sync_skills_to_repo(self.ctx.base_dir / "skills", workdir)
+
         self.ctx.engineer_manager_registry.create(workdir, llm_client, auto_start=True)
         self.left_panel.repo_tree.refresh()
         self.on_open_engineer_chat(repo_name)
@@ -434,11 +438,11 @@ class MainWindow(QMainWindow):
             )
             self.chat_tabs.add_tab(tab)
 
-        # Wire message_sent → EngineerManager.send_message
-        mgr = self.ctx.engineer_manager_registry.get(Path(path_str))
-        if mgr is not None:
-            tab.message_sent.connect(mgr.send_message)
-            tab.stop_requested.connect(mgr.cancel)
+            # Wire signals only once, when the tab is first created
+            mgr = self.ctx.engineer_manager_registry.get(Path(path_str))
+            if mgr is not None:
+                tab.message_sent.connect(mgr.send_message)
+                tab.stop_requested.connect(mgr.cancel)
 
     # ------------------------------------------------------------------
     # Engineer lifecycle (tree refresh only)
