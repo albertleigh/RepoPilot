@@ -24,6 +24,7 @@ class EventKind(Enum):
     ENGINEER_STARTED = auto()
     ENGINEER_STOPPED = auto()
     ENGINEER_MESSAGE = auto()
+    ENGINEER_USER_MESSAGE = auto()
     ENGINEER_TOOL_CALL = auto()
     ENGINEER_TOOL_RESULT = auto()
     ENGINEER_ERROR = auto()
@@ -45,6 +46,17 @@ class EventKind(Enum):
     SKILL_REGISTERED = auto()
     SKILL_UNREGISTERED = auto()
 
+    # -- Project Manager -----------------------------------------------
+    PM_STARTED = auto()
+    PM_STOPPED = auto()
+    PM_MESSAGE = auto()
+    PM_TOOL_CALL = auto()
+    PM_TOOL_RESULT = auto()
+    PM_ERROR = auto()
+    PM_PROGRESS = auto()
+    PM_TASK_DISPATCHED = auto()
+    PM_TASK_VERIFIED = auto()
+
 
 # ------------------------------------------------------------------
 # Base event
@@ -59,6 +71,15 @@ class Event:
 # ------------------------------------------------------------------
 # Engineer manager events
 # ------------------------------------------------------------------
+
+@dataclass
+class EngineerUserMessageEvent(Event):
+    """Emitted when a message is sent to an engineer from an external source."""
+    workdir: str = ""
+    text: str = ""
+    source: str = ""
+    kind: EventKind = field(default=EventKind.ENGINEER_USER_MESSAGE, init=False)
+
 
 @dataclass
 class EngineerStartedEvent(Event):

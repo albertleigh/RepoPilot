@@ -114,6 +114,7 @@ class MainWindow(QMainWindow):
         self.left_panel.repo_tree.repo_start_engineer.connect(self.on_start_engineer)
         self.left_panel.repo_tree.repo_stop_engineer.connect(self.on_stop_engineer)
         self.left_panel.repo_tree.repo_open_chat.connect(self.on_open_engineer_chat)
+        self.left_panel.repo_tree.open_project_manager.connect(self.on_open_project_manager)
 
         # Refresh tree icon when an engineer starts or stops
         self._event_bridge.on(
@@ -451,3 +452,70 @@ class MainWindow(QMainWindow):
     def _on_engineer_lifecycle(self, event: Event):
         """Refresh the repo tree when an engineer starts or stops."""
         self.left_panel.repo_tree.refresh()
+
+    # ------------------------------------------------------------------
+    # Project Manager handlers
+    # ------------------------------------------------------------------
+
+    def on_open_project_manager(self):
+        """Open (or focus) the ProjectManagerChatTab and ensure the PM is running."""
+        from .tabs_item import ProjectManagerChatTab
+
+        # Re-use existing tab if open
+        tab = self.chat_tabs.find_tab(ProjectManagerChatTab)
+        if tab is not None:
+            # If the PM was shut down but the tab is still open, restart it
+            pm = self.ctx.project_manager_registry.get()
+            if pm is None or not pm.is_running:
+                llm_client = self.ctx.llm_client_registry.selected_client()
+                if llm_client is None:
+                    QMessageBox.warning(
+                        self, "No LLM selected",
+                        "Please select an LLM client before starting the Project Manager.",
+                    )
+                    return
+                pm = self.ctx.project_manager_registry.create(llm_client, auto_start=True)
+                llm_name = self.ctx.llm_client_registry.selected_name() or ""
+                tab.set_llm_name(llm_name)
+                # Reconnect signals to the new PM instance
+                tab.message_sent.disconnect()
+                tab.stop_requested.disconnect()
+                tab.shutdown_requested.disconnect()
+                tab.message_sent.connect(pm.send_message)
+                tab.stop_requested.connect(pm.cancel)
+                tab.shutdown_requested.connect(self._on_pm_shutdown)
+                self.statusBar().showMessage("Project Manager restarted")
+            self.chat_tabs.focus_tab(tab)
+            return
+
+        # Ensure an LLM client is selected
+        llm_client = self.ctx.llm_client_registry.selected_client()
+        if llm_client is None:
+            QMessageBox.warning(
+                self, "No LLM selected",
+                "Please select an LLM client before starting the Project Manager.",
+            )
+            return
+
+        # Start the PM if not already running
+        pm = self.ctx.project_manager_registry.get()
+        if pm is None or not pm.is_running:
+            pm = self.ctx.project_manager_registry.create(llm_client, auto_start=True)
+
+        llm_name = self.ctx.llm_client_registry.selected_name() or ""
+        tab = ProjectManagerChatTab(
+            event_bus=self.ctx.event_bus,
+            llm_name=llm_name,
+        )
+        self.chat_tabs.add_tab(tab)
+
+        # Wire signals
+        tab.message_sent.connect(pm.send_message)
+        tab.stop_requested.connect(pm.cancel)
+        tab.shutdown_requested.connect(self._on_pm_shutdown)
+        self.statusBar().showMessage("Project Manager opened")
+
+    def _on_pm_shutdown(self):
+        """Shut down the ProjectManager completely (can be restarted later)."""
+        self.ctx.project_manager_registry.shutdown()
+        self.statusBar().showMessage("Project Manager shut down")

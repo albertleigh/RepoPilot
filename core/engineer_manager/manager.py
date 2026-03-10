@@ -45,6 +45,7 @@ from core.events import (
     EngineerStoppedEvent,
     EngineerToolCallEvent,
     EngineerToolResultEvent,
+    EngineerUserMessageEvent,
     TodoUpdatedEvent,
     TaskCreatedEvent,
     TaskUpdatedEvent,
@@ -70,7 +71,7 @@ from .tool_definitions import TOOLS
 
 _log = logging.getLogger(__name__)
 
-MAX_TOOL_ROUNDS = 40  # hard cap to prevent infinite tool-loop spirals
+MAX_TOOL_ROUNDS = 200  # hard cap to prevent infinite tool-loop spirals
 
 
 class Status(Enum):
@@ -125,7 +126,10 @@ class EngineerManager:
         self._stop = threading.Event()
         self._cancel = threading.Event()   # soft cancel: abort current run, keep thread alive
         self._wake = threading.Event()      # set to unblock idle loop
+        self._idle_event = threading.Event()  # set when agent returns to IDLE
+        self._idle_event.set()  # starts idle
         self._thread: threading.Thread | None = None
+        self._last_response: str = ""  # last assistant text for external callers
 
         # -- conversation history --
         self._messages: list[dict] = []
@@ -351,6 +355,7 @@ class EngineerManager:
                 drain_count += 1
                 _log.debug("[DIAG] _agent_loop dequeued msg #%d (len=%d): %.80s... for %s", drain_count, len(user_text), user_text, self.workdir)
                 self.status = Status.RUNNING
+                self._idle_event.clear()
                 msgs.append({"role": "user", "content": user_text})
                 self._emit_event(EngineerStartedEvent(workdir=str(self.workdir)))
 
@@ -367,6 +372,7 @@ class EngineerManager:
                 finally:
                     self._cancel.clear()
                     self.status = Status.IDLE
+                    self._idle_event.set()
                     self._emit_event(EngineerStoppedEvent(workdir=str(self.workdir)))
                     _log.debug("[DIAG] _agent_loop emitted STOPPED, back to drain for %s", self.workdir)
 
@@ -425,6 +431,7 @@ class EngineerManager:
             msgs.append(response.assistant_message)
 
             if response.text:
+                self._last_response = response.text
                 _log.debug("[DIAG] Emitting ENGINEER_MESSAGE (len=%d): %.120s... for %s",
                            len(response.text), response.text, self.workdir)
                 self._emit_event(EngineerMessageEvent(
@@ -537,11 +544,24 @@ class EngineerManager:
         with self._log_lock:
             return list(self._event_log)
 
-    def send_message(self, text: str) -> None:
+    def send_message(self, text: str, source: str = "") -> None:
         """Send a user message into the agent loop (thread-safe).
 
         Automatically wakes the loop if it is idle.
+
+        Parameters
+        ----------
+        text:
+            The message content.
+        source:
+            Optional label for the sender (e.g. ``"Project Manager"``).
+            When non-empty an :class:`EngineerUserMessageEvent` is
+            emitted so the UI can display the external message.
         """
+        if source:
+            self._emit_event(EngineerUserMessageEvent(
+                workdir=str(self.workdir), text=text, source=source,
+            ))
         self._inbox.put(text)
         self.wake()
 
@@ -565,6 +585,19 @@ class EngineerManager:
         return to idle, ready for the next user message.
         """
         self._cancel.set()
+
+    def wait_until_idle(self, timeout: float | None = None) -> bool:
+        """Block until this engineer finishes its current task.
+
+        Returns ``True`` if the engineer became idle within *timeout*
+        seconds, ``False`` on timeout.  If the engineer is already
+        idle this returns immediately.
+        """
+        return self._idle_event.wait(timeout=timeout)
+
+    def get_last_response(self) -> str:
+        """Return the last assistant text produced by the tool loop."""
+        return self._last_response
 
     def shutdown(self) -> None:
         """Signal the loop to stop and wait for the thread to finish."""

@@ -19,6 +19,7 @@ from .event_types import (
     EngineerStoppedEvent,
     EngineerToolCallEvent,
     EngineerToolResultEvent,
+    EngineerUserMessageEvent,
     # Todos
     TodoUpdatedEvent,
     # Tasks
@@ -45,6 +46,7 @@ __all__ = [
     "EngineerStoppedEvent",
     "EngineerToolCallEvent",
     "EngineerToolResultEvent",
+    "EngineerUserMessageEvent",
     # Todos
     "TodoUpdatedEvent",
     # Tasks

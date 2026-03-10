@@ -26,6 +26,7 @@ class RepoTree(QWidget):
     repo_start_engineer = Signal(str)   # Emits repo name → start agent
     repo_stop_engineer = Signal(str)    # Emits repo name → stop agent
     repo_open_chat = Signal(str)        # Emits repo name → open engineer tab
+    open_project_manager = Signal()     # Request to open the PM chat tab
 
     def __init__(
         self,
@@ -49,6 +50,12 @@ class RepoTree(QWidget):
         header_label = QLabel("📚 Repositories")
         header_label.setStyleSheet("font-weight: bold; font-size: 12px;")
         header_layout.addWidget(header_label)
+
+        self.manager_button = QPushButton("\U0001F4CB")
+        self.manager_button.setMaximumWidth(30)
+        self.manager_button.setToolTip("Open Project Manager")
+        self.manager_button.clicked.connect(self.open_project_manager.emit)
+        header_layout.addWidget(self.manager_button)
 
         self.add_button = QPushButton("+")
         self.add_button.setMaximumWidth(30)
