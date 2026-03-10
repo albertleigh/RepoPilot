@@ -22,11 +22,14 @@ Usage::
 """
 from __future__ import annotations
 
+import logging
 from typing import Callable
 
 from PySide6.QtCore import QObject, Signal
 
 from core.events import Event, EventBus, EventKind
+
+_log = logging.getLogger(__name__)
 
 
 class QtEventBridge(QObject):
@@ -44,6 +47,7 @@ class QtEventBridge(QObject):
     def __init__(self, bus: EventBus, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._bus = bus
+        self._closed = False
         self._unsub = bus.subscribe(self._on_event)
         self.destroyed.connect(self._destroyed)
 
@@ -52,9 +56,19 @@ class QtEventBridge(QObject):
     # ------------------------------------------------------------------
 
     def _on_event(self, event: Event) -> None:
-        # Signal emission from a non-Qt thread is safe — PySide6
-        # automatically queues it to the receiver's thread.
-        self.event_received.emit(event)
+        # Guard: the C++ QObject may already be destroyed when the
+        # EventBus worker thread delivers this callback.  In that
+        # case emitting the signal would raise RuntimeError.
+        if self._closed:
+            _log.debug("[DIAG] QtEventBridge._on_event: CLOSED, dropping %s", event.kind)
+            return
+        try:
+            _log.debug("[DIAG] QtEventBridge._on_event: emitting Qt signal for %s", event.kind)
+            self.event_received.emit(event)
+        except RuntimeError:
+            # C++ object deleted between the guard check and emit
+            _log.warning("[DIAG] QtEventBridge._on_event: RuntimeError, closing bridge for %s", event.kind)
+            self._closed = True
 
     # ------------------------------------------------------------------
     # Convenience helpers
@@ -85,6 +99,7 @@ class QtEventBridge(QObject):
 
     def close(self) -> None:
         """Unsubscribe from the bus.  Safe to call multiple times."""
+        self._closed = True
         if self._unsub is not None:
             self._unsub()
             self._unsub = None

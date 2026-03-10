@@ -64,6 +64,7 @@ class RepoTree(QWidget):
         self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self._show_context_menu)
         self.tree.itemClicked.connect(self._on_item_clicked)
+        self.tree.itemDoubleClicked.connect(self._on_item_double_clicked)
         layout.addWidget(self.tree)
 
     # ------------------------------------------------------------------
@@ -98,6 +99,18 @@ class RepoTree(QWidget):
         name = item.data(0, Qt.UserRole)
         if name:
             self.repo_selected.emit(name)
+
+    def _on_item_double_clicked(self, item, column):
+        name = item.data(0, Qt.UserRole)
+        if not name:
+            return
+        from pathlib import Path
+        path_str = self._repo_reg.get(name)
+        mgr = self._eng_reg.get(Path(path_str)) if path_str else None
+        running = mgr is not None and mgr.is_running
+        if not running:
+            self.repo_start_engineer.emit(name)
+        self.repo_open_chat.emit(name)
 
     def _show_context_menu(self, position):
         item = self.tree.itemAt(position)

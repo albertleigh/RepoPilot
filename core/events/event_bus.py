@@ -111,6 +111,7 @@ class EventBus:
         Returns immediately.  The event is delivered to subscribers on
         the dedicated worker thread.
         """
+        _log.debug("[DIAG] EventBus.emit_async: kind=%s, queue_before_put", event.kind)
         self._queue.put(event)
 
     # ------------------------------------------------------------------
@@ -123,6 +124,8 @@ class EventBus:
             item = self._queue.get()
             if item is _SENTINEL:
                 break
+            _log.debug("[DIAG] EventBus._worker_loop delivering: kind=%s, num_subscribers=%d",
+                       item.kind, len(self._subscribers))
             self.emit(item)  # type: ignore[arg-type]
 
     # ------------------------------------------------------------------

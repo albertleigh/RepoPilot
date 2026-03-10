@@ -437,11 +437,8 @@ class MainWindow(QMainWindow):
         # Wire message_sent → EngineerManager.send_message
         mgr = self.ctx.engineer_manager_registry.get(Path(path_str))
         if mgr is not None:
-            try:
-                tab.message_sent.disconnect()
-            except RuntimeError:
-                pass
             tab.message_sent.connect(mgr.send_message)
+            tab.stop_requested.connect(mgr.cancel)
 
     # ------------------------------------------------------------------
     # Engineer lifecycle (tree refresh only)

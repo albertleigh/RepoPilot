@@ -232,7 +232,7 @@ class DebugPanel(QWidget):
 
         # LLM Providers
         lines.append("═══ LLM Providers ═══")
-        for name in ctx.llm_provider_registry.names():
+        for name in ctx.llm_provider_registry.provider_names():
             lines.append(f"  • {name}")
 
         # LLM Clients
@@ -251,7 +251,7 @@ class DebugPanel(QWidget):
         # Engineers
         lines.append("\n═══ Running Engineers ═══")
         for path, mgr in ctx.engineer_manager_registry.all_managers().items():
-            status = "running" if mgr._running else "stopped"
+            status = "running" if mgr.is_running else "stopped"
             lines.append(f"  • {path}  [{status}]")
         if not ctx.engineer_manager_registry.all_managers():
             lines.append("  (none)")

@@ -40,11 +40,17 @@ from core.events import (
     EventBus,
     EngineerErrorEvent,
     EngineerMessageEvent,
+    EngineerProgressEvent,
     EngineerStartedEvent,
     EngineerStoppedEvent,
     EngineerToolCallEvent,
     EngineerToolResultEvent,
     TodoUpdatedEvent,
+    TaskCreatedEvent,
+    TaskUpdatedEvent,
+    TeammateSpawnedEvent,
+    TeammateStoppedEvent,
+    SkillRegisteredEvent,
 )
 
 from .background_manager import BackgroundManager
@@ -63,6 +69,8 @@ from .todo_manager import TodoManager
 from .tool_definitions import TOOLS
 
 _log = logging.getLogger(__name__)
+
+MAX_TOOL_ROUNDS = 40  # hard cap to prevent infinite tool-loop spirals
 
 
 class Status(Enum):
@@ -105,6 +113,7 @@ class EngineerManager:
         self.bg = BackgroundManager(self.workdir)
         self.team = TeammateManager(
             self.workdir, self.bus, self.tasks, self._llm,
+            event_bus=self._event_bus,
         )
 
         # -- shutdown / plan tracking --
@@ -114,6 +123,7 @@ class EngineerManager:
         # -- thread plumbing --
         self._inbox: Queue[str] = Queue()  # user → agent
         self._stop = threading.Event()
+        self._cancel = threading.Event()   # soft cancel: abort current run, keep thread alive
         self._wake = threading.Event()      # set to unblock idle loop
         self._thread: threading.Thread | None = None
 
@@ -138,23 +148,23 @@ class EngineerManager:
             "read_file":        lambda **kw: run_read(w, kw["path"], kw.get("limit")),
             "write_file":       lambda **kw: run_write(w, kw["path"], kw["content"]),
             "edit_file":        lambda **kw: run_edit(w, kw["path"], kw["old_text"], kw["new_text"]),
-            "TodoWrite":        lambda **kw: self.todo.update(kw["items"]),
+            "TodoWrite":        lambda **kw: self._handle_todo_write(kw["items"]),
             "task":             lambda **kw: self._run_subagent(kw["prompt"], kw.get("agent_type", "Explore")),
-            "load_skill":       lambda **kw: self.skills.load(kw["name"]),
+            "load_skill":       lambda **kw: self._handle_load_skill(kw["name"]),
             "compress":         lambda **kw: "Compressing...",
             "background_run":   lambda **kw: self.bg.run(kw["command"], kw.get("timeout", 120)),
             "check_background": lambda **kw: self.bg.check(kw.get("task_id")),
-            "task_create":      lambda **kw: self.tasks.create(kw["subject"], kw.get("description", "")),
+            "task_create":      lambda **kw: self._handle_task_create(kw["subject"], kw.get("description", "")),
             "task_get":         lambda **kw: self.tasks.get(kw["task_id"]),
-            "task_update":      lambda **kw: self.tasks.update(kw["task_id"], kw.get("status"), kw.get("add_blocked_by"), kw.get("add_blocks")),
+            "task_update":      lambda **kw: self._handle_task_update(kw["task_id"], kw.get("status"), kw.get("add_blocked_by"), kw.get("add_blocks")),
             "task_list":        lambda **kw: self.tasks.list_all(),
             "claim_task":       lambda **kw: self.tasks.claim(kw["task_id"], "lead"),
-            "spawn_teammate":   lambda **kw: self.team.spawn(kw["name"], kw["role"], kw["prompt"]),
+            "spawn_teammate":   lambda **kw: self._handle_spawn_teammate(kw["name"], kw["role"], kw["prompt"]),
             "list_teammates":   lambda **kw: self.team.list_all(),
             "send_message":     lambda **kw: self.bus.send("lead", kw["to"], kw["content"], kw.get("msg_type", "message")),
             "read_inbox":       lambda **kw: json.dumps(self.bus.read_inbox("lead"), indent=2),
             "broadcast":        lambda **kw: self.bus.broadcast("lead", kw["content"], self.team.member_names()),
-            "shutdown_request": lambda **kw: self._handle_shutdown_request(kw["teammate"]),
+            "shutdown_request": lambda **kw: self._handle_shutdown_request_with_event(kw["teammate"]),
             "plan_approval":    lambda **kw: self._handle_plan_review(kw["request_id"], kw["approve"], kw.get("feedback", "")),
             "idle":             lambda **kw: "Lead does not idle.",
         }
@@ -213,6 +223,58 @@ class EngineerManager:
         )
         return f"Shutdown request {req_id} sent to '{teammate}'"
 
+    # ------------------------------------------------------------------
+    # Event-emitting handler wrappers
+    # ------------------------------------------------------------------
+
+    def _handle_todo_write(self, items: list) -> str:
+        result = self.todo.update(items)
+        self._emit_event(TodoUpdatedEvent(
+            workdir=str(self.workdir), items=self.todo.items,
+        ))
+        return result
+
+    def _handle_task_create(self, subject: str, description: str) -> str:
+        result = self.tasks.create(subject, description)
+        task = json.loads(result)
+        self._emit_event(TaskCreatedEvent(
+            workdir=str(self.workdir),
+            task_id=str(task["id"]),
+            title=task["subject"],
+        ))
+        return result
+
+    def _handle_task_update(self, task_id: int, status=None,
+                            add_blocked_by=None, add_blocks=None) -> str:
+        result = self.tasks.update(task_id, status, add_blocked_by, add_blocks)
+        self._emit_event(TaskUpdatedEvent(
+            workdir=str(self.workdir),
+            task_id=str(task_id),
+            status=status or "",
+        ))
+        return result
+
+    def _handle_spawn_teammate(self, name: str, role: str, prompt: str) -> str:
+        result = self.team.spawn(name, role, prompt)
+        if not result.startswith("Error"):
+            self._emit_event(TeammateSpawnedEvent(
+                workdir=str(self.workdir), teammate_id=name,
+            ))
+        return result
+
+    def _handle_load_skill(self, name: str) -> str:
+        result = self.skills.load(name)
+        if not result.startswith("Error"):
+            self._emit_event(SkillRegisteredEvent(name=name))
+        return result
+
+    def _handle_shutdown_request_with_event(self, teammate: str) -> str:
+        result = self._handle_shutdown_request(teammate)
+        self._emit_event(TeammateStoppedEvent(
+            workdir=str(self.workdir), teammate_id=teammate,
+        ))
+        return result
+
     def _handle_plan_review(
         self, request_id: str, approve: bool, feedback: str = "",
     ) -> str:
@@ -231,8 +293,19 @@ class EngineerManager:
     # ------------------------------------------------------------------
 
     def _system_prompt(self) -> str:
+        import platform
+        os_info = f"{platform.system()} ({platform.machine()})"
+        shell_hint = (
+            "The shell is PowerShell. Use PowerShell syntax for bash commands "
+            "(e.g. Get-ChildItem instead of ls, Get-Content instead of cat, "
+            "Select-String instead of grep, Select-Object -First N instead of head -N). "
+            "Unix commands like ls, head, tail, cat, grep will NOT work."
+            if platform.system() == "Windows"
+            else ""
+        )
         return (
             f"You are a coding agent at {self.workdir}. "
+            f"OS: {os_info}. {shell_hint}\n"
             "Use tools to solve tasks.\n"
             "Prefer task_create/task_update/task_list for multi-step work. "
             "Use TodoWrite for short checklists.\n"
@@ -246,46 +319,79 @@ class EngineerManager:
     # ------------------------------------------------------------------
 
     def _agent_loop(self) -> None:
-        """Process one user message per iteration via the full tool-use loop."""
+        """Process user messages via the full tool-use loop.
+
+        Multiple messages may arrive while the agent is busy.  After
+        each tool-loop completes we re-check the inbox so queued
+        messages are never starved.
+        """
         rounds_without_todo = 0
         msgs = self._messages
+        _log.debug("[DIAG] _agent_loop STARTED for %s", self.workdir)
 
         while not self._stop.is_set():
             # --- block until woken (no busy-wait) ---
+            _log.debug("[DIAG] _agent_loop waiting on _wake for %s", self.workdir)
             self._wake.wait()
             if self._stop.is_set():
+                _log.debug("[DIAG] _agent_loop stop requested, exiting for %s", self.workdir)
                 break
             self._wake.clear()
+            _log.debug("[DIAG] _agent_loop WOKEN, inbox size ~%d for %s", self._inbox.qsize(), self.workdir)
 
-            # --- drain all queued messages ---
-            try:
-                user_text = self._inbox.get_nowait()
-            except Empty:
-                continue
+            # --- drain all queued messages one-by-one ---
+            drain_count = 0
+            while not self._stop.is_set():
+                try:
+                    user_text = self._inbox.get_nowait()
+                except Empty:
+                    _log.debug("[DIAG] _agent_loop inbox drained, processed %d messages for %s", drain_count, self.workdir)
+                    break  # inbox empty, go back to _wake.wait()
 
-            self.status = Status.RUNNING
-            msgs.append({"role": "user", "content": user_text})
-            self._emit_event(EngineerStartedEvent(workdir=str(self.workdir)))
+                drain_count += 1
+                _log.debug("[DIAG] _agent_loop dequeued msg #%d (len=%d): %.80s... for %s", drain_count, len(user_text), user_text, self.workdir)
+                self.status = Status.RUNNING
+                msgs.append({"role": "user", "content": user_text})
+                self._emit_event(EngineerStartedEvent(workdir=str(self.workdir)))
 
-            try:
-                self._run_tool_loop(msgs, rounds_without_todo)
-            except Exception:
-                _log.exception("Agent loop error in %s", self.workdir)
-                self._emit_event(EngineerErrorEvent(
-                    workdir=str(self.workdir),
-                    error="Internal agent error – see logs.",
-                ))
-            finally:
-                self.status = Status.IDLE
-                self._emit_event(EngineerStoppedEvent(workdir=str(self.workdir)))
+                self._cancel.clear()
+                try:
+                    self._run_tool_loop(msgs, rounds_without_todo)
+                    _log.debug("[DIAG] _run_tool_loop completed normally for %s", self.workdir)
+                except Exception:
+                    _log.exception("Agent loop error in %s", self.workdir)
+                    self._emit_event(EngineerErrorEvent(
+                        workdir=str(self.workdir),
+                        error="Internal agent error – see logs.",
+                    ))
+                finally:
+                    self._cancel.clear()
+                    self.status = Status.IDLE
+                    self._emit_event(EngineerStoppedEvent(workdir=str(self.workdir)))
+                    _log.debug("[DIAG] _agent_loop emitted STOPPED, back to drain for %s", self.workdir)
 
     def _run_tool_loop(self, msgs: list, rounds_without_todo: int) -> None:
         """Inner loop: LLM call → tool dispatch → repeat until end_turn."""
-        while not self._stop.is_set():
+        tool_round = 0
+        while not self._stop.is_set() and not self._cancel.is_set():
+            tool_round += 1
+            if tool_round > MAX_TOOL_ROUNDS:
+                _log.warning("Tool-loop hit %d rounds, forcing stop for %s", MAX_TOOL_ROUNDS, self.workdir)
+                self._emit_event(EngineerMessageEvent(
+                    workdir=str(self.workdir),
+                    text=f"\u26a0\ufe0f Reached maximum tool rounds ({MAX_TOOL_ROUNDS}). Stopping to avoid infinite loop.",
+                ))
+                break
+            _log.debug("[DIAG] _run_tool_loop round %d starting for %s", tool_round, self.workdir)
             # -- compression --
             microcompact(msgs)
             if estimate_tokens(msgs) > TOKEN_THRESHOLD:
                 _log.info("Auto-compact triggered for %s", self.workdir)
+                self._emit_event(EngineerProgressEvent(
+                    workdir=str(self.workdir),
+                    phase="compressing",
+                    detail="Compacting conversation history\u2026",
+                ))
                 msgs[:] = auto_compact(msgs, self._llm, self.workdir)
 
             # -- drain background notifications --
@@ -305,17 +411,29 @@ class EngineerManager:
                 msgs.append({"role": "assistant", "content": "Noted inbox messages."})
 
             # -- LLM call with tools --
+            self._emit_event(EngineerProgressEvent(
+                workdir=str(self.workdir),
+                phase="thinking",
+                detail=f"Waiting for LLM response (round {tool_round})\u2026",
+            ))
+            _log.debug("[DIAG] _run_tool_loop calling LLM (round %d) for %s", tool_round, self.workdir)
             response = self._llm.send_with_tools(
                 msgs, TOOLS, self._system_prompt(),
             )
+            _log.debug("[DIAG] LLM responded: stop_reason=%s, has_text=%s, num_tool_calls=%d for %s",
+                       response.stop_reason, bool(response.text), len(response.tool_calls or []), self.workdir)
             msgs.append(response.assistant_message)
 
             if response.text:
+                _log.debug("[DIAG] Emitting ENGINEER_MESSAGE (len=%d): %.120s... for %s",
+                           len(response.text), response.text, self.workdir)
                 self._emit_event(EngineerMessageEvent(
                     workdir=str(self.workdir), text=response.text,
                 ))
 
             if response.stop_reason != "tool_use":
+                _log.debug("[DIAG] _run_tool_loop DONE (stop_reason=%s) after %d rounds for %s",
+                           response.stop_reason, tool_round, self.workdir)
                 break
 
             # -- Tool dispatch --
@@ -323,13 +441,30 @@ class EngineerManager:
             used_todo = False
             manual_compress = False
             for tc in response.tool_calls:
+                if self._cancel.is_set():
+                    _log.info("Cancel requested mid-tool-dispatch, breaking for %s", self.workdir)
+                    break
                 if tc.name == "compress":
                     manual_compress = True
+                # Build a descriptive progress message
+                if tc.name == "bash":
+                    cmd_preview = tc.input.get("command", "")[:80]
+                    progress_detail = f"Running: {cmd_preview}\u2026"
+                else:
+                    progress_detail = f"Running {tc.name}\u2026"
+                self._emit_event(EngineerProgressEvent(
+                    workdir=str(self.workdir),
+                    phase="executing_tool",
+                    detail=progress_detail,
+                ))
                 handler = self._handlers.get(tc.name)
+                _log.info("[TOOL] Dispatching %s (round %d) for %s", tc.name, tool_round, self.workdir)
                 try:
                     output = handler(**tc.input) if handler else f"Unknown tool: {tc.name}"
                 except Exception as e:
                     output = f"Error: {e}"
+                    _log.warning("[TOOL] %s raised: %s", tc.name, e)
+                _log.info("[TOOL] %s completed (output_len=%d) for %s", tc.name, len(str(output)), self.workdir)
                 _log.debug("> %s: %s", tc.name, str(output)[:200])
                 results.append({"tool_use_id": tc.id, "output": str(output)})
                 self._emit_event(EngineerToolCallEvent(
@@ -357,16 +492,29 @@ class EngineerManager:
                 _log.info("Manual compact for %s", self.workdir)
                 msgs[:] = auto_compact(msgs, self._llm, self.workdir)
 
+        # If cancelled, note it in the conversation so context is preserved
+        if self._cancel.is_set():
+            _log.info("Tool loop cancelled by user for %s", self.workdir)
+            msgs.append({"role": "assistant", "content": "[Cancelled by user]"})
+            self._emit_event(EngineerMessageEvent(
+                workdir=str(self.workdir),
+                text="\u26d4 Stopped by user.",
+            ))
+
     # ------------------------------------------------------------------
     # Event helpers
     # ------------------------------------------------------------------
 
     def _emit_event(self, event: Any) -> None:
         """Emit a typed event on the global bus (async, non-blocking)."""
+        _log.debug("[DIAG] _emit_event: kind=%s, bus=%s for %s",
+                   getattr(event, 'kind', '?'), self._event_bus is not None, self.workdir)
         with self._log_lock:
             self._event_log.append(event)
         if self._event_bus is not None:
             self._event_bus.emit_async(event)
+        else:
+            _log.warning("[DIAG] _emit_event: NO event_bus! Event lost: %s", getattr(event, 'kind', '?'))
 
     # ------------------------------------------------------------------
     # Public API (thread-safe)
@@ -408,6 +556,15 @@ class EngineerManager:
         agent to re-enter its tool loop.
         """
         self._wake.set()
+
+    def cancel(self) -> None:
+        """Soft-cancel the current tool loop.
+
+        The agent thread stays alive and the conversation history is
+        preserved.  The loop will break at the next check-point and
+        return to idle, ready for the next user message.
+        """
+        self._cancel.set()
 
     def shutdown(self) -> None:
         """Signal the loop to stop and wait for the thread to finish."""

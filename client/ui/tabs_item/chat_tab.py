@@ -1,142 +1,131 @@
 """
 Chat Tab Component
-Individual chat conversation tab with message history and input
+Individual LLM chat conversation tab with message history and input.
+Built on :class:`BaseChatTab` for a consistent look across all chat UIs.
 """
 from PySide6.QtWidgets import (
-    QVBoxLayout, QHBoxLayout, QTextEdit,
-    QPushButton, QLabel, QWidget,
+    QFrame, QHBoxLayout, QLabel, QPushButton,
 )
-from PySide6.QtCore import Signal
-from datetime import datetime
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor
 
-from .base_tab import BaseTab
+from .base_chat_tab import BaseChatTab
 
 
-class ChatTab(BaseTab):
-    """Individual chat conversation tab"""
-    
-    # Signals
-    message_sent = Signal(str)  # Emits user message
+def _rgb(c: QColor) -> str:
+    return f"rgb({c.red()}, {c.green()}, {c.blue()})"
+
+
+def _rgba(c: QColor, a: float) -> str:
+    return f"rgba({c.red()}, {c.green()}, {c.blue()}, {a})"
+
+
+class ChatTab(BaseChatTab):
+    """Individual LLM chat conversation tab."""
 
     tab_icon = "\U0001F4AC"  # 💬
-    
-    def __init__(self, repo_name: str = "Unknown", llm_name: str = "Default LLM", parent=None):
+
+    def __init__(
+        self,
+        repo_name: str = "Unknown",
+        llm_name: str = "Default LLM",
+        parent=None,
+    ):
         super().__init__(parent)
         self.repo_name = repo_name
         self.llm_name = llm_name
-        self.message_history = []
-        self.setup_ui()
-    
-    def setup_ui(self):
-        """Create chat tab UI"""
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(5, 5, 5, 5)
-        
-        # Header with context info
-        header_layout = QHBoxLayout()
-        context_label = QLabel(f"💬 Chat - Repo: {self.repo_name} | LLM: {self.llm_name}")
-        context_label.setStyleSheet("font-weight: bold; padding: 5px; background-color: palette(midlight); color: palette(window-text);")
-        header_layout.addWidget(context_label)
-        layout.addLayout(header_layout)
-        
-        # Chat history display
-        self.chat_display = QTextEdit()
-        self.chat_display.setReadOnly(True)
-        self.chat_display.setPlaceholderText("Conversation will appear here...")
-        layout.addWidget(self.chat_display, stretch=3)
-        
-        # Input section
-        input_container = QWidget()
-        input_layout = QVBoxLayout(input_container)
-        input_layout.setContentsMargins(0, 5, 0, 0)
-        
-        # Multi-line input
-        input_label = QLabel("Input your message:")
-        input_layout.addWidget(input_label)
-        
-        self.message_input = QTextEdit()
-        self.message_input.setPlaceholderText("Type your question about the repository here...")
-        self.message_input.setMaximumHeight(100)
-        input_layout.addWidget(self.message_input)
-        
-        # Buttons
-        button_layout = QHBoxLayout()
-        
-        self.send_button = QPushButton("Send Message")
-        self.send_button.clicked.connect(self._on_send_message)
-        self.send_button.setMinimumHeight(35)
-        button_layout.addWidget(self.send_button)
-        
-        self.clear_button = QPushButton("Clear History")
-        self.clear_button.clicked.connect(self._on_clear_history)
-        button_layout.addWidget(self.clear_button)
-        
-        button_layout.addStretch()
-        input_layout.addLayout(button_layout)
-        
-        layout.addWidget(input_container, stretch=0)
-    
-    def _on_send_message(self):
-        """Handle send message"""
-        message = self.message_input.toPlainText().strip()
-        if not message:
-            return
-        
-        # Add user message to display
-        self._add_message("User", message)
-        
-        # Clear input
-        self.message_input.clear()
-        
-        # Emit signal
-        self.message_sent.emit(message)
-        
-        # Add dummy response (placeholder for actual LLM integration)
-        self._add_dummy_response(message)
-    
-    def _add_message(self, sender: str, message: str):
-        """Add a message to the chat display"""
-        timestamp = datetime.now().strftime("%H:%M:%S")
-        
-        # Use palette-aware colors for sender names
-        palette = self.palette()
-        highlight = palette.highlight().color()
-        link = palette.link().color()
-        # User gets the link color, assistant gets a contrasting accent
-        if sender == "User":
-            sender_color = f"rgb({link.red()}, {link.green()}, {link.blue()})"
+
+        self.input_bar.set_placeholder(
+            "Type your question about the repository here\u2026"
+        )
+        self._set_header(self._build_header())
+
+    # ------------------------------------------------------------------
+    # Header
+    # ------------------------------------------------------------------
+
+    def _build_header(self) -> QFrame:
+        header = QFrame()
+        header.setObjectName("chatHeader")
+        layout = QHBoxLayout(header)
+        layout.setContentsMargins(14, 8, 14, 8)
+        layout.setSpacing(8)
+
+        self._header_label = QLabel(
+            f"\U0001F4AC  <b>Chat</b> \u2014 {self.repo_name}"
+            f'  <span style="font-weight:normal; font-size:12px;'
+            f' opacity:0.7;">{self.llm_name}</span>'
+        )
+        self._header_label.setTextFormat(Qt.RichText)
+        layout.addWidget(self._header_label)
+
+        layout.addStretch()
+
+        clear_btn = QPushButton("Clear")
+        clear_btn.setFlat(True)
+        clear_btn.setCursor(Qt.PointingHandCursor)
+        clear_btn.setMaximumHeight(26)
+        clear_btn.clicked.connect(self.clear_chat)
+        layout.addWidget(clear_btn)
+
+        self._style_header(header, clear_btn)
+        return header
+
+    def _style_header(self, header: QFrame, clear_btn: QPushButton):
+        pal = self.palette()
+        win = pal.window().color()
+        fg = pal.windowText().color()
+        mid = pal.mid().color()
+
+        if win.lightness() > 128:
+            bg = _rgb(win.darker(105))
         else:
-            # Shift highlight hue for assistant to differentiate
-            accent = highlight.lighter(130) if highlight.lightness() < 128 else highlight.darker(130)
-            sender_color = f"rgb({accent.red()}, {accent.green()}, {accent.blue()})"
+            bg = _rgb(win.lighter(112))
 
-        fg = palette.windowText().color()
-        text_color = f"rgb({fg.red()}, {fg.green()}, {fg.blue()})"
+        header.setStyleSheet(
+            f"#chatHeader {{"
+            f"  background-color: {bg};"
+            f"  border-bottom: 1px solid {_rgba(mid, 0.3)};"
+            f"}}"
+            f"#chatHeader QLabel {{"
+            f"  color: {_rgb(fg)}; font-size: 13px;"
+            f"}}"
+        )
+        clear_btn.setStyleSheet(
+            f"color: {_rgba(fg, 0.5)}; font-size: 12px; padding: 2px 8px;"
+            f"border: 1px solid {_rgba(mid, 0.3)}; border-radius: 4px;"
+        )
 
-        formatted_message = f"""
-<div style="margin-bottom: 10px;">
-    <b style="color: {sender_color};">[{timestamp}] {sender}:</b><br>
-    <span style="margin-left: 20px; color: {text_color};">{message}</span>
-</div>
-        """
-        
-        self.chat_display.append(formatted_message)
-        self.message_history.append({"sender": sender, "message": message, "timestamp": timestamp})
-    
+    # ------------------------------------------------------------------
+    # Override: also generate a dummy response (placeholder)
+    # ------------------------------------------------------------------
+
+    def _on_submit(self, text: str):
+        super()._on_submit(text)
+        self._add_dummy_response(text)
+
     def _add_dummy_response(self, user_message: str):
-        """Add a dummy LLM response (placeholder)"""
-        dummy_response = f"This is a simulated response to: '{user_message[:50]}...'. Integration with {self.llm_name} pending."
-        self._add_message(self.llm_name, dummy_response)
-    
-    def _on_clear_history(self):
-        """Clear chat history"""
-        self.chat_display.clear()
-        self.message_history.clear()
-    
-    def add_assistant_message(self, message: str):
-        """Add an assistant message (for external calls)"""
-        self._add_message(self.llm_name, message)
-    
+        """Placeholder until real LLM integration is wired up."""
+        snippet = user_message[:50]
+        self.add_assistant_message(
+            f"*Simulated response to:* `{snippet}\u2026`\n\n"
+            f"Integration with **{self.llm_name}** pending.",
+            sender=self.llm_name,
+            avatar="\U0001F4AC",
+        )
+
+    # ------------------------------------------------------------------
+    # Public API (backward-compatible)
+    # ------------------------------------------------------------------
+
+    def add_assistant_message(self, message: str, **kw):
+        kw.setdefault("sender", self.llm_name)
+        kw.setdefault("avatar", "\U0001F4AC")
+        super().add_assistant_message(message, **kw)
+
+    # ------------------------------------------------------------------
+    # Title
+    # ------------------------------------------------------------------
+
     def get_tab_title(self) -> str:
-        """Get the tab title"""
         return f"{self.repo_name[:20]}"

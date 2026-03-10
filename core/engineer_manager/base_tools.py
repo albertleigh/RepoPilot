@@ -3,11 +3,17 @@ Base tools – sandboxed file and shell operations scoped to a workdir.
 """
 from __future__ import annotations
 
+import logging
 import subprocess
+import sys
 from pathlib import Path
+
+_log = logging.getLogger(__name__)
 
 # Commands that should never be run
 _DANGEROUS = ["rm -rf /", "sudo", "shutdown", "reboot", "> /dev/"]
+
+_IS_WINDOWS = sys.platform == "win32"
 
 
 def safe_path(workdir: Path, p: str) -> Path:
@@ -21,14 +27,32 @@ def safe_path(workdir: Path, p: str) -> Path:
 def run_bash(workdir: Path, command: str, timeout: int = 120) -> str:
     if any(d in command for d in _DANGEROUS):
         return "Error: Dangerous command blocked"
+    _log.info("[BASH] Executing (timeout=%ds): %s", timeout, command[:200])
     try:
-        r = subprocess.run(
-            command, shell=True, cwd=workdir,
-            capture_output=True, text=True, timeout=timeout,
-        )
+        if _IS_WINDOWS:
+            # Force UTF-8 output so Chinese/emoji/non-ASCII render correctly,
+            # then run the user's command.
+            wrapped = (
+                "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; "
+                "$OutputEncoding = [System.Text.Encoding]::UTF8; "
+                + command
+            )
+            args = ["powershell", "-NoProfile", "-Command", wrapped]
+            r = subprocess.run(
+                args, cwd=workdir,
+                capture_output=True, text=True, timeout=timeout,
+                encoding="utf-8", errors="replace",
+            )
+        else:
+            r = subprocess.run(
+                command, shell=True, cwd=workdir,
+                capture_output=True, text=True, timeout=timeout,
+            )
         out = (r.stdout + r.stderr).strip()
+        _log.info("[BASH] Completed (rc=%d, output_len=%d): %.120s", r.returncode, len(out), out)
         return out[:50000] if out else "(no output)"
     except subprocess.TimeoutExpired:
+        _log.warning("[BASH] Timeout after %ds: %s", timeout, command[:200])
         return f"Error: Timeout ({timeout}s)"
 
 

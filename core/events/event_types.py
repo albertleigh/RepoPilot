@@ -27,6 +27,7 @@ class EventKind(Enum):
     ENGINEER_TOOL_CALL = auto()
     ENGINEER_TOOL_RESULT = auto()
     ENGINEER_ERROR = auto()
+    ENGINEER_PROGRESS = auto()
 
     # -- Todos ---------------------------------------------------------
     TODO_UPDATED = auto()
@@ -105,6 +106,20 @@ class EngineerErrorEvent(Event):
     workdir: str = ""
     error: str = ""
     kind: EventKind = field(default=EventKind.ENGINEER_ERROR, init=False)
+
+
+@dataclass
+class EngineerProgressEvent(Event):
+    """Emitted to indicate what the engineer is currently doing.
+
+    *phase* is a short machine-friendly label such as ``"thinking"``,
+    ``"compressing"``, or ``"executing_tool"``.  *detail* is an
+    optional human-readable description.
+    """
+    workdir: str = ""
+    phase: str = ""
+    detail: str = ""
+    kind: EventKind = field(default=EventKind.ENGINEER_PROGRESS, init=False)
 
 
 # ------------------------------------------------------------------

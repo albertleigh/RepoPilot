@@ -40,13 +40,15 @@ class TeammateManager:
     """Manages persistent autonomous teammates for an EngineerManager."""
 
     def __init__(self, workdir: Path, bus: MessageBus,
-                 task_mgr: TaskManager, llm_client) -> None:
+                 task_mgr: TaskManager, llm_client,
+                 event_bus=None) -> None:
         self._workdir = workdir
         self._team_dir = workdir / ".team"
         self._team_dir.mkdir(exist_ok=True)
         self.bus = bus
         self.task_mgr = task_mgr
         self._llm = llm_client
+        self._event_bus = event_bus
         self.config_path = self._team_dir / "config.json"
         self.config = self._load_config()
         self.threads: dict[str, threading.Thread] = {}
@@ -80,6 +82,7 @@ class TeammateManager:
             target=self._loop, args=(name, role, prompt), daemon=True)
         t.start()
         self.threads[name] = t
+        self._emit_teammate_event("spawned", name)
         return f"Spawned '{name}' (role: {role})"
 
     def _set_status(self, name: str, status: str) -> None:
@@ -115,6 +118,7 @@ class TeammateManager:
                 for msg in inbox:
                     if msg.get("type") == "shutdown_request":
                         self._set_status(name, "shutdown")
+                        self._emit_teammate_event("stopped", name)
                         return
                     messages.append({"role": "user", "content": json.dumps(msg)})
                 try:
@@ -124,11 +128,14 @@ class TeammateManager:
                 except Exception:
                     _log.exception("Teammate '%s' LLM call failed", name)
                     self._set_status(name, "shutdown")
+                    self._emit_teammate_event("stopped", name)
                     return
 
                 messages.append(response.assistant_message)
 
                 if response.stop_reason != "tool_use":
+                    if response.text:
+                        self._emit_teammate_event("message", name, response.text)
                     break
 
                 # Dispatch tools
@@ -162,12 +169,14 @@ class TeammateManager:
                     for msg in inbox:
                         if msg.get("type") == "shutdown_request":
                             self._set_status(name, "shutdown")
+                            self._emit_teammate_event("stopped", name)
                             return
                         messages.append({"role": "user", "content": json.dumps(msg)})
                     resume = True
                     break
             if not resume:
                 self._set_status(name, "shutdown")
+                self._emit_teammate_event("stopped", name)
                 return
             self._set_status(name, "working")
 
@@ -181,3 +190,27 @@ class TeammateManager:
 
     def member_names(self) -> list[str]:
         return [m["name"] for m in self.config["members"]]
+
+    # ------------------------------------------------------------------
+    # Event emission
+    # ------------------------------------------------------------------
+
+    def _emit_teammate_event(self, kind: str, name: str, text: str = "") -> None:
+        if self._event_bus is None:
+            return
+        from core.events import (
+            TeammateSpawnedEvent, TeammateStoppedEvent, TeammateMessageEvent,
+        )
+        workdir = str(self._workdir)
+        if kind == "spawned":
+            self._event_bus.emit_async(TeammateSpawnedEvent(
+                workdir=workdir, teammate_id=name,
+            ))
+        elif kind == "stopped":
+            self._event_bus.emit_async(TeammateStoppedEvent(
+                workdir=workdir, teammate_id=name,
+            ))
+        elif kind == "message":
+            self._event_bus.emit_async(TeammateMessageEvent(
+                workdir=workdir, teammate_id=name, text=text,
+            ))

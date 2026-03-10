@@ -1,0 +1,24 @@
+"""
+Reusable chat UI components.
+
+These widgets can be assembled into any chat-style tab (LLM chat,
+engineer agent, future assistants, etc.).
+"""
+from .chat_display import ChatDisplay
+from .chat_input import ChatInputBar
+from .message_bubble import MessageBubble, MessageRole
+from .tool_call_widget import ToolCallWidget
+from .status_widget import StatusWidget
+from .thinking_indicator import ThinkingIndicator
+from .markdown_renderer import render_markdown
+
+__all__ = [
+    "ChatDisplay",
+    "ChatInputBar",
+    "MessageBubble",
+    "MessageRole",
+    "ToolCallWidget",
+    "StatusWidget",
+    "ThinkingIndicator",
+    "render_markdown",
+]
