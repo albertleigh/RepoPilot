@@ -11,6 +11,7 @@ import logging
 from core.LLMClients.base import LLMClient
 from core.events import EventBus
 from core.engineer_manager.registry import EngineerManagerRegistry
+from core.mcp.registry import McpServerRegistry
 from core.repo_registry import RepoRegistry
 
 from .manager import ProjectManager
@@ -26,10 +27,12 @@ class ProjectManagerRegistry:
         engineer_registry: EngineerManagerRegistry,
         repo_registry: RepoRegistry,
         event_bus: EventBus | None = None,
+        mcp_server_registry: McpServerRegistry | None = None,
     ) -> None:
         self._eng_reg = engineer_registry
         self._repo_reg = repo_registry
         self._event_bus = event_bus
+        self._mcp_server_registry = mcp_server_registry
         self._instance: ProjectManager | None = None
 
     def create(
@@ -52,6 +55,7 @@ class ProjectManagerRegistry:
             engineer_registry=self._eng_reg,
             repo_registry=self._repo_reg,
             event_bus=self._event_bus,
+            mcp_server_registry=self._mcp_server_registry,
         )
         if auto_start:
             self._instance.start()

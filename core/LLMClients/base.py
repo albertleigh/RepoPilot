@@ -39,6 +39,8 @@ class LLMClient(ABC):
     Subclasses must also define two class-level attributes:
 
     - ``PROVIDER``  – human-readable provider label (str)
+    - ``MAX_TOOLS`` – maximum number of tool definitions the provider
+      API accepts per request (default 128).
     - ``FIELDS``    – list of field descriptors used by the creation
       dialog to render a data-driven form.  Each entry is a dict::
 
@@ -53,6 +55,7 @@ class LLMClient(ABC):
     """
 
     PROVIDER: str = ""
+    MAX_TOOLS: int = 128
     FIELDS: list[dict] = []
 
     @abstractmethod

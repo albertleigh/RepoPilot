@@ -53,6 +53,7 @@ from core.events import (
     TeammateStoppedEvent,
     SkillRegisteredEvent,
 )
+from core.mcp.registry import McpServerRegistry
 
 from .background_manager import BackgroundManager
 from .base_tools import run_bash, run_edit, run_read, run_write
@@ -100,10 +101,12 @@ class EngineerManager:
         llm_client: LLMClient,
         skills_dir: Path | None = None,
         event_bus: EventBus | None = None,
+        mcp_server_registry: McpServerRegistry | None = None,
     ) -> None:
         self.workdir = workdir.resolve()
         self._llm = llm_client
         self._event_bus = event_bus
+        self._mcp = mcp_server_registry
         self.status: Status = Status.IDLE
 
         # -- sub-services --
@@ -115,6 +118,7 @@ class EngineerManager:
         self.team = TeammateManager(
             self.workdir, self.bus, self.tasks, self._llm,
             event_bus=self._event_bus,
+            mcp_server_registry=self._mcp,
         )
 
         # -- shutdown / plan tracking --
@@ -423,8 +427,17 @@ class EngineerManager:
                 detail=f"Waiting for LLM response (round {tool_round})\u2026",
             ))
             _log.debug("[DIAG] _run_tool_loop calling LLM (round %d) for %s", tool_round, self.workdir)
+
+            # Merge built-in tools with MCP tools (respect provider limit)
+            all_tools = TOOLS
+            if self._mcp:
+                budget = self._llm.MAX_TOOLS - len(TOOLS)
+                mcp_tools = self._mcp.get_all_mcp_tool_definitions(budget=budget)
+                if mcp_tools:
+                    all_tools = TOOLS + mcp_tools
+
             response = self._llm.send_with_tools(
-                msgs, TOOLS, self._system_prompt(),
+                msgs, all_tools, self._system_prompt(),
             )
             _log.debug("[DIAG] LLM responded: stop_reason=%s, has_text=%s, num_tool_calls=%d for %s",
                        response.stop_reason, bool(response.text), len(response.tool_calls or []), self.workdir)
@@ -467,7 +480,12 @@ class EngineerManager:
                 handler = self._handlers.get(tc.name)
                 _log.info("[TOOL] Dispatching %s (round %d) for %s", tc.name, tool_round, self.workdir)
                 try:
-                    output = handler(**tc.input) if handler else f"Unknown tool: {tc.name}"
+                    if self._mcp and self._mcp.is_mcp_tool(tc.name):
+                        output = self._mcp.call_mcp_tool(tc.name, tc.input)
+                    elif handler:
+                        output = handler(**tc.input)
+                    else:
+                        output = f"Unknown tool: {tc.name}"
                 except Exception as e:
                     output = f"Error: {e}"
                     _log.warning("[TOOL] %s raised: %s", tc.name, e)

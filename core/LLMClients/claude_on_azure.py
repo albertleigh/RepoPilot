@@ -16,6 +16,7 @@ class ClaudeOnAzureClient(LLMClient):
     PROVIDER = "Claude on Azure"
     DEFAULT_MODEL = "claude-sonnet-4-5"
     MAX_TOKENS = 4096
+    MAX_TOOLS = 256
 
     FIELDS = [
         {

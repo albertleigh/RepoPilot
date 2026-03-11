@@ -20,6 +20,7 @@ from .search_bar import SearchBar
 from .left_panel import LeftPanel
 from .tabs_manager import TabsManager
 from .llm import CreateLLMDialog, ConfigureLLMDialog
+from .mcp import CreateMcpDialog, ConfigureMcpDialog
 
 
 class MainWindow(QMainWindow):
@@ -130,6 +131,12 @@ class MainWindow(QMainWindow):
         # Skill tree signals
         self.left_panel.skill_tree.skill_add_requested.connect(self.on_add_skill)
         self.left_panel.skill_tree.skill_remove_requested.connect(self.on_remove_skill)
+
+        # MCP tree signals
+        self.left_panel.mcp_tree.mcp_add_requested.connect(self.on_add_mcp)
+        self.left_panel.mcp_tree.mcp_remove_requested.connect(self.on_remove_mcp)
+        self.left_panel.mcp_tree.mcp_configure_requested.connect(self.on_configure_mcp)
+        self.left_panel.mcp_tree.mcp_start_all_requested.connect(self.on_start_all_mcp)
 
     # ------------------------------------------------------------------
     # Debug panel
@@ -374,6 +381,54 @@ class MainWindow(QMainWindow):
             self.ctx.skill_registry.unregister(skill_name)
             self.left_panel.skill_tree.remove_skill(skill_name)
             self.statusBar().showMessage(f"Skill removed: {skill_name}")
+
+    # ------------------------------------------------------------------
+    # MCP handlers
+    # ------------------------------------------------------------------
+
+    def on_add_mcp(self):
+        """Handle add MCP server – open the creation dialog."""
+        dialog = CreateMcpDialog(
+            registry=self.ctx.mcp_server_registry, parent=self)
+        dialog.mcp_created.connect(self._on_mcp_created)
+        dialog.exec()
+
+    def _on_mcp_created(self, name: str):
+        self.left_panel.mcp_tree.refresh()
+        self.statusBar().showMessage(f"MCP server '{name}' added")
+
+    def on_remove_mcp(self, mcp_name: str):
+        """Handle remove MCP server."""
+        reply = QMessageBox.question(
+            self,
+            "Remove MCP Server",
+            f"Remove MCP server: {mcp_name}?",
+            QMessageBox.Yes | QMessageBox.No,
+        )
+        if reply == QMessageBox.Yes:
+            self.ctx.mcp_server_registry.unregister(mcp_name)
+            self.left_panel.mcp_tree.refresh()
+            self.statusBar().showMessage(f"MCP server removed: {mcp_name}")
+
+    def on_configure_mcp(self, mcp_name: str):
+        """Handle configure MCP server – open the JSON editor dialog."""
+        dialog = ConfigureMcpDialog(
+            name=mcp_name,
+            registry=self.ctx.mcp_server_registry,
+            parent=self,
+        )
+        dialog.mcp_updated.connect(self._on_mcp_updated)
+        dialog.exec()
+
+    def _on_mcp_updated(self, name: str):
+        self.left_panel.mcp_tree.refresh()
+        self.statusBar().showMessage(f"MCP server '{name}' updated")
+
+    def on_start_all_mcp(self):
+        """Start all enabled MCP servers."""
+        self.ctx.mcp_server_registry.start_all()
+        self.left_panel.mcp_tree._refresh_status_icons()
+        self.statusBar().showMessage("Starting all MCP servers…")
 
     # ------------------------------------------------------------------
     # Engineer lifecycle handlers

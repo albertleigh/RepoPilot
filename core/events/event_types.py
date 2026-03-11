@@ -46,6 +46,12 @@ class EventKind(Enum):
     SKILL_REGISTERED = auto()
     SKILL_UNREGISTERED = auto()
 
+    # -- MCP Servers ---------------------------------------------------
+    MCP_SERVER_STARTED = auto()
+    MCP_SERVER_STOPPED = auto()
+    MCP_SERVER_OUTPUT = auto()
+    MCP_SERVER_ERROR = auto()
+
     # -- Project Manager -----------------------------------------------
     PM_STARTED = auto()
     PM_STOPPED = auto()
@@ -222,3 +228,37 @@ class SkillUnregisteredEvent(Event):
     """Emitted when a skill is removed."""
     name: str = ""
     kind: EventKind = field(default=EventKind.SKILL_UNREGISTERED, init=False)
+
+
+# ------------------------------------------------------------------
+# MCP server events
+# ------------------------------------------------------------------
+
+@dataclass
+class McpServerStartedEvent(Event):
+    """Emitted when an MCP server process starts."""
+    name: str = ""
+    kind: EventKind = field(default=EventKind.MCP_SERVER_STARTED, init=False)
+
+
+@dataclass
+class McpServerStoppedEvent(Event):
+    """Emitted when an MCP server process stops."""
+    name: str = ""
+    kind: EventKind = field(default=EventKind.MCP_SERVER_STOPPED, init=False)
+
+
+@dataclass
+class McpServerOutputEvent(Event):
+    """Emitted when an MCP server produces a line of output."""
+    name: str = ""
+    text: str = ""
+    kind: EventKind = field(default=EventKind.MCP_SERVER_OUTPUT, init=False)
+
+
+@dataclass
+class McpServerErrorEvent(Event):
+    """Emitted when an MCP server encounters an error."""
+    name: str = ""
+    error: str = ""
+    kind: EventKind = field(default=EventKind.MCP_SERVER_ERROR, init=False)

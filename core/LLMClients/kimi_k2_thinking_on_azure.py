@@ -18,6 +18,7 @@ class KimiK2ThinkingOnAzureClient(LLMClient):
     PROVIDER = "Kimi-K2-Thinking on Azure"
     DEFAULT_MODEL = "Kimi-K2-Thinking"
     MAX_TOKENS = 4096
+    MAX_TOOLS = 256
 
     FIELDS = [
         {

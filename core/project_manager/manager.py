@@ -47,6 +47,7 @@ from core.engineer_manager.compression import (
 )
 from core.engineer_manager.todo_manager import TodoManager
 from core.engineer_manager.registry import EngineerManagerRegistry
+from core.mcp.registry import McpServerRegistry
 from core.repo_registry import RepoRegistry
 
 from .tool_definitions import PM_TOOLS
@@ -95,11 +96,13 @@ class ProjectManager:
         engineer_registry: EngineerManagerRegistry,
         repo_registry: RepoRegistry,
         event_bus: EventBus | None = None,
+        mcp_server_registry: McpServerRegistry | None = None,
     ) -> None:
         self._llm = llm_client
         self._eng_reg = engineer_registry
         self._repo_reg = repo_registry
         self._event_bus = event_bus
+        self._mcp = mcp_server_registry
         self.status: PMStatus = PMStatus.IDLE
 
         # -- sub-services --
@@ -567,8 +570,17 @@ class ProjectManager:
                 phase="thinking",
                 detail=f"Planning (round {tool_round})\u2026",
             ))
+
+            # Merge built-in PM tools with MCP tools (respect provider limit)
+            all_tools = PM_TOOLS
+            if self._mcp:
+                budget = self._llm.MAX_TOOLS - len(PM_TOOLS)
+                mcp_tools = self._mcp.get_all_mcp_tool_definitions(budget=budget)
+                if mcp_tools:
+                    all_tools = PM_TOOLS + mcp_tools
+
             response = self._llm.send_with_tools(
-                msgs, PM_TOOLS, self._system_prompt(),
+                msgs, all_tools, self._system_prompt(),
             )
             msgs.append(response.assistant_message)
 
@@ -593,7 +605,12 @@ class ProjectManager:
                 ))
                 handler = self._handlers.get(tc.name)
                 try:
-                    output = handler(**tc.input) if handler else f"Unknown tool: {tc.name}"
+                    if self._mcp and self._mcp.is_mcp_tool(tc.name):
+                        output = self._mcp.call_mcp_tool(tc.name, tc.input)
+                    elif handler:
+                        output = handler(**tc.input)
+                    else:
+                        output = f"Unknown tool: {tc.name}"
                 except Exception as e:
                     output = f"Error: {e}"
                     _log.warning("[PM TOOL] %s raised: %s", tc.name, e)

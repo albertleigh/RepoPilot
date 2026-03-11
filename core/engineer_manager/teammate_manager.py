@@ -41,7 +41,8 @@ class TeammateManager:
 
     def __init__(self, workdir: Path, bus: MessageBus,
                  task_mgr: TaskManager, llm_client,
-                 event_bus=None) -> None:
+                 event_bus=None,
+                 mcp_server_registry=None) -> None:
         self._workdir = workdir
         self._team_dir = workdir / ".team"
         self._team_dir.mkdir(exist_ok=True)
@@ -49,6 +50,7 @@ class TeammateManager:
         self.task_mgr = task_mgr
         self._llm = llm_client
         self._event_bus = event_bus
+        self._mcp = mcp_server_registry
         self.config_path = self._team_dir / "config.json"
         self.config = self._load_config()
         self.threads: dict[str, threading.Thread] = {}
@@ -111,6 +113,14 @@ class TeammateManager:
             "claim_task": lambda **kw: self.task_mgr.claim(kw["task_id"], name),
         }
 
+        # Merge built-in teammate tools with MCP tools (respect provider limit)
+        all_tools = TEAMMATE_TOOLS
+        if self._mcp:
+            budget = self._llm.MAX_TOOLS - len(TEAMMATE_TOOLS)
+            mcp_tools = self._mcp.get_all_mcp_tool_definitions(budget=budget)
+            if mcp_tools:
+                all_tools = TEAMMATE_TOOLS + mcp_tools
+
         while True:
             # -- WORK PHASE --
             for _ in range(50):
@@ -123,7 +133,7 @@ class TeammateManager:
                     messages.append({"role": "user", "content": json.dumps(msg)})
                 try:
                     response = self._llm.send_with_tools(
-                        messages, TEAMMATE_TOOLS, sys_prompt,
+                        messages, all_tools, sys_prompt,
                     )
                 except Exception:
                     _log.exception("Teammate '%s' LLM call failed", name)
@@ -145,6 +155,11 @@ class TeammateManager:
                     if tc.name == "idle":
                         idle_requested = True
                         output = "Entering idle phase."
+                    elif self._mcp and self._mcp.is_mcp_tool(tc.name):
+                        try:
+                            output = self._mcp.call_mcp_tool(tc.name, tc.input)
+                        except Exception as e:
+                            output = f"Error: {e}"
                     else:
                         handler = dispatch.get(tc.name, lambda **kw: "Unknown")
                         try:

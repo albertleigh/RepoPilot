@@ -13,6 +13,7 @@ from pathlib import Path
 from .events import EventBus
 from .LLMClients.base import LLMClientRegistry, LLMProviderRegistry
 from .engineer_manager.registry import EngineerManagerRegistry
+from .mcp.registry import McpServerRegistry
 from .project_manager.registry import ProjectManagerRegistry
 from .repo_registry import RepoRegistry
 from .skills.skill_registry import SkillRegistry
@@ -54,14 +55,22 @@ class AppContext:
         self.repo_registry = RepoRegistry(base_dir=self.base_dir)
         self.repo_registry.load()
 
+        self.mcp_server_registry = McpServerRegistry(
+            base_dir=self.base_dir,
+            event_bus=self.event_bus,
+        )
+        self.mcp_server_registry.load()
+
         self.engineer_manager_registry = EngineerManagerRegistry(
             event_bus=self.event_bus,
+            mcp_server_registry=self.mcp_server_registry,
         )
 
         self.project_manager_registry = ProjectManagerRegistry(
             engineer_registry=self.engineer_manager_registry,
             repo_registry=self.repo_registry,
             event_bus=self.event_bus,
+            mcp_server_registry=self.mcp_server_registry,
         )
 
     # ------------------------------------------------------------------
@@ -72,6 +81,7 @@ class AppContext:
         """Tear down long-lived resources (call before exit)."""
         self.project_manager_registry.shutdown()
         self.engineer_manager_registry.shutdown_all()
+        self.mcp_server_registry.shutdown()
         self.event_bus.shutdown()
 
     # ------------------------------------------------------------------
