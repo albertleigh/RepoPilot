@@ -7,6 +7,14 @@ this manager operates at the *project* level: it decomposes user
 requirements into per-repo tasks, dispatches them to engineer agents,
 monitors progress, and verifies completion.
 
+Unlike a pure dispatcher, the PM has **direct access** to every
+registered repository (bash, read, write, edit) so it can:
+
+- Inspect code and tests before planning — think critically, not blindly.
+- Make surgical cross-repo fixes itself (shared interfaces, configs).
+- Debate with engineers and challenge their approaches.
+- Relay context between repos to keep contracts in sync.
+
 Architecture
 ------------
 - One ProjectManager per project / session.
@@ -14,11 +22,15 @@ Architecture
   / ``get_event_history`` APIs and the shared ``EventBus``.
 - Maintains its own LLM-powered tool loop for planning & coordination.
 - Uses the same wake/cancel/shutdown lifecycle as EngineerManager.
+- Reuses ``base_tools`` functions for sandboxed file/shell operations.
 
 Tool palette (see ``tool_definitions.py``):
+    bash, read_file, write_file, edit_file,
     plan_create, plan_list, plan_get,
     dispatch_task, check_engineer, list_engineers, stop_engineer,
-    verify_task, broadcast_engineers, query_engineer,
+    wait_for_engineer, wait_for_engineers, discuss_with_engineer,
+    verify_task, broadcast_engineers, query_engineer, share_context,
+    background_run, check_background,
     TodoWrite, compress, progress_report
 """
 from __future__ import annotations
@@ -39,6 +51,8 @@ from core.events import (
     EventBus,
     TodoUpdatedEvent,
 )
+from core.engineer_manager.background_manager import BackgroundManager
+from core.engineer_manager.base_tools import run_bash, run_edit, run_read, run_write
 from core.engineer_manager.compression import (
     TOKEN_THRESHOLD,
     auto_compact,
@@ -107,6 +121,7 @@ class ProjectManager:
 
         # -- sub-services --
         self.todo = TodoManager()
+        self._bg_managers: dict[str, BackgroundManager] = {}  # repo path → bg mgr
 
         # -- plans --
         self._plans: dict[str, dict] = {}  # plan_id → plan data
@@ -137,22 +152,67 @@ class ProjectManager:
 
     def _build_handlers(self) -> dict[str, Callable[..., Any]]:
         return {
+            # -- direct repo access (reuses engineer base_tools) --
+            "bash":                lambda **kw: self._repo_tool(kw["repo"], run_bash, kw["command"]),
+            "read_file":           lambda **kw: self._repo_tool(kw["repo"], run_read, kw["path"], kw.get("limit")),
+            "write_file":          lambda **kw: self._repo_tool(kw["repo"], run_write, kw["path"], kw["content"]),
+            "edit_file":           lambda **kw: self._repo_tool(kw["repo"], run_edit, kw["path"], kw["old_text"], kw["new_text"]),
+            # -- planning --
             "plan_create":         lambda **kw: self._handle_plan_create(kw["title"], kw["tasks"]),
             "plan_list":           lambda **kw: self._handle_plan_list(),
             "plan_get":            lambda **kw: self._handle_plan_get(kw["plan_id"]),
+            # -- engineer dispatch & monitoring --
             "dispatch_task":       lambda **kw: self._handle_dispatch(kw["repo"], kw["prompt"], kw.get("plan_id"), kw.get("task_index")),
             "check_engineer":      lambda **kw: self._handle_check_engineer(kw["repo"]),
             "list_engineers":      lambda **kw: self._handle_list_engineers(),
             "stop_engineer":       lambda **kw: self._handle_stop_engineer(kw["repo"]),
+            # -- synchronous wait --
             "wait_for_engineer":   lambda **kw: self._handle_wait_for_engineer(kw["repo"], kw.get("timeout", 300)),
             "wait_for_engineers":  lambda **kw: self._handle_wait_for_engineers(kw["repos"], kw.get("timeout", 600)),
+            # -- debate / discussion --
+            "discuss_with_engineer": lambda **kw: self._handle_discuss(kw["repo"], kw["message"], kw.get("timeout", 300)),
+            # -- verification --
             "verify_task":         lambda **kw: self._handle_verify(kw["repo"], kw["acceptance_criteria"], kw.get("plan_id"), kw.get("task_index")),
+            # -- cross-repo coordination --
             "broadcast_engineers": lambda **kw: self._handle_broadcast(kw["message"]),
             "query_engineer":      lambda **kw: self._handle_query(kw["repo"], kw["question"]),
+            "share_context":       lambda **kw: self._handle_share_context(kw["source_repo"], kw["source_path"], kw["target_repo"], kw["message"]),
+            # -- background --
+            "background_run":      lambda **kw: self._handle_background_run(kw["repo"], kw["command"], kw.get("timeout", 120)),
+            "check_background":    lambda **kw: self._handle_check_background(kw.get("task_id")),
+            # -- internal --
             "TodoWrite":           lambda **kw: self._handle_todo_write(kw["items"]),
             "compress":            lambda **kw: "Compressing...",
             "progress_report":     lambda **kw: self._handle_progress_report(),
         }
+
+    # ------------------------------------------------------------------
+    # Repo resolution (shared by all repo-scoped tools)
+    # ------------------------------------------------------------------
+
+    def _resolve_workdir(self, repo_name: str) -> tuple[Path | None, str | None]:
+        """Resolve a repo display name → absolute Path, or an error string."""
+        path_str = self._repo_reg.get(repo_name)
+        if not path_str:
+            return None, f"Repository '{repo_name}' not found in registry."
+        return Path(path_str), None
+
+    def _repo_tool(self, repo_name: str, fn: Callable, *args: Any) -> str:
+        """Call a ``base_tools`` function after resolving *repo_name* → workdir."""
+        workdir, err = self._resolve_workdir(repo_name)
+        if err:
+            return f"Error: {err}"
+        return fn(workdir, *args)
+
+    def _get_bg_manager(self, repo_name: str) -> tuple[BackgroundManager | None, str | None]:
+        """Get-or-create a BackgroundManager for *repo_name*."""
+        workdir, err = self._resolve_workdir(repo_name)
+        if err:
+            return None, err
+        key = str(workdir)
+        if key not in self._bg_managers:
+            self._bg_managers[key] = BackgroundManager(workdir)
+        return self._bg_managers[key], None
 
     # ------------------------------------------------------------------
     # Plan management
@@ -427,6 +487,98 @@ class ProjectManager:
         return f"Query sent to '{repo}' engineer. Check status later with check_engineer."
 
     # ------------------------------------------------------------------
+    # Debate / synchronous discussion
+    # ------------------------------------------------------------------
+
+    def _handle_discuss(self, repo: str, message: str, timeout: int = 300) -> str:
+        """Send a message to an engineer and block until it replies.
+
+        This is the core "debate" primitive: the PM sends a question,
+        critique, or design proposal, then waits for the engineer to
+        finish its tool loop before reading the response.
+        """
+        mgr, err = self._resolve_engineer(repo)
+        if err:
+            return f"Error: {err}"
+
+        self._emit_event(PMProgressEvent(
+            phase="discussing",
+            detail=f"Discussing with {repo} engineer\u2026",
+        ))
+        mgr.send_message(
+            f"[PROJECT MANAGER — DISCUSSION]: {message}",
+            source="Project Manager",
+        )
+        ok = mgr.wait_until_idle(timeout=timeout)
+        if not ok:
+            return json.dumps({
+                "repo": repo, "status": "timeout",
+                "message": f"Engineer did not respond within {timeout}s.",
+            })
+
+        last = mgr.get_last_response()
+        return json.dumps({
+            "repo": repo,
+            "status": "replied",
+            "response": last[:5000] if last else "(no text response)",
+        }, indent=2)
+
+    # ------------------------------------------------------------------
+    # Cross-repo context sharing
+    # ------------------------------------------------------------------
+
+    def _handle_share_context(
+        self, source_repo: str, source_path: str,
+        target_repo: str, message: str,
+    ) -> str:
+        """Read a file from *source_repo* and relay it to *target_repo*'s engineer."""
+        # Read content from source repo (reuses base_tools.run_read)
+        content = self._repo_tool(source_repo, run_read, source_path)
+        if content.startswith("Error:"):
+            return content
+
+        target_mgr, err = self._resolve_engineer(target_repo)
+        if err:
+            return f"Error (target): {err}"
+
+        relay = (
+            f"[CROSS-REPO CONTEXT from {source_repo}]\n"
+            f"File: {source_path}\n"
+            f"Note: {message}\n\n"
+            f"```\n{content[:8000]}\n```"
+        )
+        target_mgr.send_message(relay, source="Project Manager")
+        return (
+            f"Shared {source_repo}/{source_path} "
+            f"({len(content)} chars) with {target_repo} engineer."
+        )
+
+    # ------------------------------------------------------------------
+    # Background execution (repo-scoped)
+    # ------------------------------------------------------------------
+
+    def _handle_background_run(self, repo: str, command: str, timeout: int = 120) -> str:
+        bg, err = self._get_bg_manager(repo)
+        if err:
+            return f"Error: {err}"
+        return bg.run(command, timeout)
+
+    def _handle_check_background(self, task_id: str | None = None) -> str:
+        # Aggregate across all repo bg managers
+        if task_id:
+            for bg in self._bg_managers.values():
+                result = bg.check(task_id)
+                if not result.startswith("Unknown"):
+                    return result
+            return f"Unknown task: {task_id}"
+        parts = []
+        for repo_path, bg in self._bg_managers.items():
+            status = bg.check()
+            if status != "No bg tasks.":
+                parts.append(f"[{Path(repo_path).name}]\n{status}")
+        return "\n\n".join(parts) if parts else "No background tasks."
+
+    # ------------------------------------------------------------------
     # Todo / progress
     # ------------------------------------------------------------------
 
@@ -466,8 +618,19 @@ class ProjectManager:
 
     def _system_prompt(self) -> str:
         os_info = f"{platform.system()} ({platform.machine()})"
+        shell_hint = (
+            "The shell is PowerShell. Use PowerShell syntax for bash commands "
+            "(e.g. Get-ChildItem instead of ls, Get-Content instead of cat, "
+            "Select-String instead of grep)."
+            if platform.system() == "Windows"
+            else ""
+        )
 
-        repos = list(self._repo_reg.all_repos().keys())
+        repos = self._repo_reg.all_repos()  # {name: path}
+        repo_list = "\n".join(
+            f"  - {name}: {path}" for name, path in repos.items()
+        ) if repos else "  (none registered)"
+
         running = [
             Path(k).name
             for k, m in self._eng_reg.all_managers().items()
@@ -475,35 +638,79 @@ class ProjectManager:
         ]
 
         return (
-            f"You are a Project Manager agent coordinating software engineering work "
-            f"across multiple repositories.\n"
-            f"OS: {os_info}.\n\n"
-            f"AVAILABLE REPOSITORIES: {', '.join(repos) if repos else 'none registered'}\n"
+            f"You are a **Project Manager** agent — a senior technical lead "
+            f"who coordinates multi-repository software projects.\n"
+            f"OS: {os_info}. {shell_hint}\n\n"
+            f"REGISTERED REPOSITORIES:\n{repo_list}\n\n"
             f"RUNNING ENGINEERS: {', '.join(running) if running else 'none'}\n\n"
-            "YOUR ROLE:\n"
-            "1. Receive high-level requirements from the user.\n"
-            "2. Break them down into concrete, testable sub-tasks per repository.\n"
-            "3. Create a plan with plan_create, then dispatch tasks to engineer agents.\n"
-            "4. Monitor progress with check_engineer and list_engineers.\n"
-            "5. Verify completed work meets acceptance criteria with verify_task.\n"
-            "6. Report back to the user with a clear summary.\n\n"
+            # ---- IDENTITY & MINDSET ----
+            "IDENTITY & MINDSET:\n"
+            "You are NOT a blind task dispatcher. You are a hands-on tech lead who:\n"
+            "- Reads and understands code BEFORE making plans.\n"
+            "- Thinks critically about architecture, dependencies, and risks.\n"
+            "- Challenges engineers when their approach seems wrong.\n"
+            "- Makes small cross-repo fixes yourself when delegation is wasteful.\n"
+            "- Keeps shared interfaces, contracts, and configs in sync across repos.\n\n"
+            # ---- TOOLS ----
+            "YOUR TOOLS (two tiers):\n"
+            "1. DIRECT ACTION — you have bash, read_file, write_file, edit_file "
+            "   scoped to any registered repo. Use these to:\n"
+            "   - Read code, tests, configs before planning.\n"
+            "   - Run tests or build commands to verify state.\n"
+            "   - Make surgical fixes (shared types, API contracts, env configs).\n"
+            "   - Inspect engineer output to validate quality.\n"
+            "2. COORDINATION — plan_create, dispatch_task, wait_for_engineer, "
+            "   discuss_with_engineer, verify_task, share_context, etc.\n\n"
+            # ---- WORKFLOW ----
             "WORKFLOW:\n"
-            "- Always start by understanding the requirement fully.\n"
-            "- Create a plan before dispatching any tasks.\n"
-            "- Dispatch tasks in dependency order (check depends_on).\n"
-            "- After dispatching, use wait_for_engineer to block until the "
-            "engineer finishes. Do NOT poll with check_engineer.\n"
-            "- For parallel work, dispatch multiple tasks then use "
-            "wait_for_engineers to await all results at once (like Promise.all).\n"
-            "- Verify each task before marking it complete.\n"
-            "- If an engineer is stuck or times out, provide guidance or reassign.\n\n"
-            "IMPORTANT:\n"
-            "- You do NOT edit files directly. You delegate to engineers.\n"
-            "- Engineers are autonomous — tell them WHAT to do, not HOW.\n"
-            "- Use TodoWrite to track your own coordination progress.\n"
-            "- Use progress_report for cross-project visibility.\n"
-            "- Be specific in dispatch prompts: include file paths, test commands, "
-            "and acceptance criteria when known.\n"
+            "1. UNDERSTAND — Read relevant code across repos first. Don't plan blind.\n"
+            "2. PLAN — Create a structured plan with plan_create. Include file paths, "
+            "   test commands, and concrete acceptance criteria.\n"
+            "3. EXECUTE — Decide per-task: do it yourself (small/cross-repo) or "
+            "   dispatch to an engineer (large/isolated). Not everything needs delegation.\n"
+            "4. COORDINATE — Share context between repos with share_context. "
+            "   Relay API contracts, type definitions, and interface changes.\n"
+            "5. REVIEW & DEBATE — After an engineer finishes, read their changes "
+            "   with read_file. Use discuss_with_engineer to challenge, request "
+            "   revisions, or debate design trade-offs. Don't blindly accept.\n"
+            "6. VERIFY — Run tests with bash, check acceptance criteria, "
+            "   and verify cross-repo integration works end-to-end.\n"
+            "7. REPORT — Summarize what was done, what was verified, and any "
+            "   remaining risks.\n\n"
+            # ---- DISPATCH vs SELF-DO ----
+            "DECIDING WHAT TO DELEGATE vs DO YOURSELF:\n"
+            "- DELEGATE: Large features, multi-file refactors within one repo, "
+            "  tasks needing deep repo-specific knowledge.\n"
+            "- DO YOURSELF: Cross-repo interface updates, config changes, "
+            "  small bug fixes, reading code for context, running tests, "
+            "  writing shared documentation or specs.\n\n"
+            # ---- CROSS-REPO ----
+            "CROSS-REPO COORDINATION:\n"
+            "- When Repo A defines an API that Repo B consumes, use share_context "
+            "  to relay the contract/types.\n"
+            "- After one engineer changes a shared interface, proactively update "
+            "  or notify the dependent repo.\n"
+            "- Use broadcast_engineers for project-wide announcements.\n\n"
+            # ---- DEBATE ----
+            "ENGINEER DISCUSSION:\n"
+            "- Use discuss_with_engineer for synchronous Q&A with a specific "
+            "  engineer. This blocks until the engineer responds.\n"
+            "- Push back when an engineer's approach has issues — suggest "
+            "  alternatives, ask clarifying questions, request changes.\n"
+            "- Share your own analysis and code readings to ground the debate.\n\n"
+            # ---- WAIT PATTERNS ----
+            "WAIT PATTERNS:\n"
+            "- After dispatch_task, use wait_for_engineer to block for the result.\n"
+            "- For parallel work, dispatch multiple tasks then wait_for_engineers.\n"
+            "- Do NOT poll with check_engineer — use the blocking wait tools.\n\n"
+            # ---- RULES ----
+            "RULES:\n"
+            "- Always read code before dispatching tasks about it.\n"
+            "- Be specific in dispatch prompts: include exact file paths and "
+            "  test commands.\n"
+            "- Don't over-decompose: prefer fewer, well-scoped tasks.\n"
+            "- Track your own progress with TodoWrite.\n"
+            "- Use progress_report for overall project visibility.\n"
         )
 
     # ------------------------------------------------------------------
@@ -565,10 +772,25 @@ class ProjectManager:
                 ))
                 msgs[:] = auto_compact(msgs, self._llm, Path("."))
 
+            # -- drain background notifications --
+            bg_notifs: list[str] = []
+            for repo_path, bg in self._bg_managers.items():
+                for n in bg.drain():
+                    bg_notifs.append(
+                        f"[bg:{n['task_id']}@{Path(repo_path).name}] "
+                        f"{n['status']}: {n['result']}"
+                    )
+            if bg_notifs:
+                msgs.append({
+                    "role": "user",
+                    "content": f"<background-results>\n{''.join(bg_notifs)}\n</background-results>",
+                })
+                msgs.append({"role": "assistant", "content": "Noted background results."})
+
             # -- LLM call --
             self._emit_event(PMProgressEvent(
                 phase="thinking",
-                detail=f"Planning (round {tool_round})\u2026",
+                detail=f"Thinking (round {tool_round})\u2026",
             ))
 
             # Merge built-in PM tools with MCP tools (respect provider limit)
@@ -599,9 +821,29 @@ class ProjectManager:
                 if tc.name == "compress":
                     manual_compress = True
 
+                # Build descriptive progress detail
+                if tc.name == "bash":
+                    cmd_preview = tc.input.get("command", "")[:80]
+                    repo_label = tc.input.get("repo", "?")
+                    progress_detail = f"[{repo_label}] Running: {cmd_preview}\u2026"
+                elif tc.name in ("read_file", "write_file", "edit_file"):
+                    repo_label = tc.input.get("repo", "?")
+                    path_label = tc.input.get("path", "?")
+                    progress_detail = f"[{repo_label}] {tc.name}: {path_label}"
+                elif tc.name == "discuss_with_engineer":
+                    progress_detail = f"Discussing with {tc.input.get('repo', '?')} engineer\u2026"
+                elif tc.name == "share_context":
+                    progress_detail = (
+                        f"Sharing {tc.input.get('source_repo', '?')}/"
+                        f"{tc.input.get('source_path', '?')} → "
+                        f"{tc.input.get('target_repo', '?')}"
+                    )
+                else:
+                    progress_detail = f"Running {tc.name}\u2026"
+
                 self._emit_event(PMProgressEvent(
                     phase="executing_tool",
-                    detail=f"Running {tc.name}\u2026",
+                    detail=progress_detail,
                 ))
                 handler = self._handlers.get(tc.name)
                 try:
@@ -621,6 +863,16 @@ class ProjectManager:
                 self._emit_event(PMToolResultEvent(
                     tool_name=tc.name, output=str(output)[:2000],
                 ))
+
+            # Ensure ALL tool_use blocks get a tool_result (cancel may
+            # have skipped some).  The API requires 1-to-1 matching.
+            result_ids = {r["tool_use_id"] for r in results}
+            for tc in response.tool_calls:
+                if tc.id not in result_ids:
+                    results.append({
+                        "tool_use_id": tc.id,
+                        "output": "[cancelled]",
+                    })
 
             msgs.extend(self._llm.make_tool_results(results))
 
