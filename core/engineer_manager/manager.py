@@ -323,6 +323,70 @@ class EngineerManager:
         )
 
     # ------------------------------------------------------------------
+    # Message-history repair
+    # ------------------------------------------------------------------
+
+    def _patch_orphaned_tool_use(self, msgs: list) -> None:
+        """Ensure every ``tool_use`` block has a matching ``tool_result``.
+
+        Scans *msgs* in-place and inserts synthetic ``tool_result``
+        entries for any ``tool_use`` ids that lack one (e.g. after a
+        cancel or an unexpected exception mid-dispatch).
+        """
+        i = 0
+        while i < len(msgs):
+            msg = msgs[i]
+            if msg.get("role") != "assistant":
+                i += 1
+                continue
+            content = msg.get("content")
+            if not isinstance(content, (list, tuple)):
+                i += 1
+                continue
+            # Collect tool_use ids from this assistant message
+            tool_ids: set[str] = set()
+            for block in content:
+                if isinstance(block, dict):
+                    if block.get("type") == "tool_use":
+                        tool_ids.add(block["id"])
+                elif getattr(block, "type", None) == "tool_use":
+                    tool_ids.add(block.id)
+            if not tool_ids:
+                i += 1
+                continue
+            # Check the next message for matching tool_results
+            if i + 1 < len(msgs):
+                nxt = msgs[i + 1]
+                if nxt.get("role") == "user" and isinstance(nxt.get("content"), list):
+                    for part in nxt["content"]:
+                        tid = part.get("tool_use_id") if isinstance(part, dict) else None
+                        if tid:
+                            tool_ids.discard(tid)
+            if not tool_ids:
+                i += 1
+                continue
+            # Orphaned tool_use blocks — inject tool_result entries
+            _log.warning(
+                "Repairing %d orphaned tool_use block(s) at msg index %d",
+                len(tool_ids), i,
+            )
+            repair = [
+                {"type": "tool_result", "tool_use_id": tid,
+                 "content": "[no result \u2013 recovered]"}
+                for tid in tool_ids
+            ]
+            if (i + 1 < len(msgs)
+                    and msgs[i + 1].get("role") == "user"
+                    and isinstance(msgs[i + 1].get("content"), list)
+                    and any(
+                        isinstance(p, dict) and p.get("type") == "tool_result"
+                        for p in msgs[i + 1]["content"])):
+                msgs[i + 1]["content"].extend(repair)
+            else:
+                msgs.insert(i + 1, {"role": "user", "content": repair})
+            i += 2  # skip past the repaired pair
+
+    # ------------------------------------------------------------------
     # Agent loop (runs inside a daemon thread)
     # ------------------------------------------------------------------
 
@@ -427,6 +491,7 @@ class EngineerManager:
                 detail=f"Waiting for LLM response (round {tool_round})\u2026",
             ))
             _log.debug("[DIAG] _run_tool_loop calling LLM (round %d) for %s", tool_round, self.workdir)
+            self._patch_orphaned_tool_use(msgs)
 
             # Merge built-in tools with MCP tools (respect provider limit)
             all_tools = TOOLS
@@ -505,10 +570,15 @@ class EngineerManager:
                 if tc.name == "TodoWrite":
                     used_todo = True
 
+            # Ensure ALL tool_use blocks get a tool_result (cancel may
+            # have skipped some).  The API requires 1-to-1 matching.
+            result_ids = {r["tool_use_id"] for r in results}
+            for tc in response.tool_calls:
+                if tc.id not in result_ids:
+                    results.append({"tool_use_id": tc.id, "output": "[Cancelled by user]"})
+
             # nag reminder (only when todo workflow is active)
             rounds_without_todo = 0 if used_todo else rounds_without_todo + 1
-            if self.todo.has_open_items() and rounds_without_todo >= 3:
-                results.insert(0, {"tool_use_id": "_nag", "output": "<reminder>Update your todos.</reminder>"})
 
             msgs.extend(self._llm.make_tool_results(results))
 
