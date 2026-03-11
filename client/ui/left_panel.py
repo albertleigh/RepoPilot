@@ -2,7 +2,7 @@
 Left Panel Component
 Combines repository and LLM client tree views
 """
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QSplitter
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QSplitter, QPushButton
 from PySide6.QtCore import Qt, Signal
 from core.context import AppContext
 from .left_panel_components import RepoTree, LLMTree, SkillTree, MCPTree, CollapsibleSection
@@ -87,12 +87,25 @@ class LeftPanel(QWidget):
             action_button_text="+",
             action_button_tooltip="Add MCP server"
         )
-        self.mcp_tree = MCPTree(show_header=False)
+        self.mcp_tree = MCPTree(
+            mcp_registry=self.ctx.mcp_server_registry,
+            show_header=False,
+        )
         self.mcp_section.set_content(self.mcp_tree)
         
         # Connect action button to add MCP server
         self.mcp_section.action_button_clicked.connect(self.mcp_tree.mcp_add_requested.emit)
         self.mcp_section.toggled.connect(self._on_section_toggled)
+
+        # Extra "▶ All" button on the MCP section header
+        self._mcp_start_all_btn = QPushButton("▶ All")
+        self._mcp_start_all_btn.setMaximumWidth(44)
+        self._mcp_start_all_btn.setToolTip("Start all enabled MCP servers")
+        self._mcp_start_all_btn.clicked.connect(
+            self.mcp_tree.mcp_start_all_requested.emit)
+        # Insert before the existing "+" button
+        hdr = self.mcp_section.header_frame.layout()
+        hdr.insertWidget(hdr.count() - 1, self._mcp_start_all_btn)
         
         self.splitter.addWidget(self.mcp_section)
 

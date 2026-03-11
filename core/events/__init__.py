@@ -32,6 +32,11 @@ from .event_types import (
     # Skills
     SkillRegisteredEvent,
     SkillUnregisteredEvent,
+    # MCP
+    McpServerStartedEvent,
+    McpServerStoppedEvent,
+    McpServerOutputEvent,
+    McpServerErrorEvent,
 )
 
 __all__ = [
@@ -59,4 +64,9 @@ __all__ = [
     # Skills
     "SkillRegisteredEvent",
     "SkillUnregisteredEvent",
+    # MCP
+    "McpServerStartedEvent",
+    "McpServerStoppedEvent",
+    "McpServerOutputEvent",
+    "McpServerErrorEvent",
 ]

@@ -25,7 +25,7 @@ from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QFont
 
 from core.context import AppContext
-from core.events import Event
+from core.events import Event, EventKind
 from .event_bridge import QtEventBridge
 
 _MAX_EVENT_LOG = 500
@@ -95,6 +95,7 @@ class DebugPanel(QWidget):
         self._tabs.addTab(self._build_widget_tree_tab(), "🌳 Widget Tree")
         self._tabs.addTab(self._build_services_tab(), "⚙️ Services")
         self._tabs.addTab(self._build_log_tail_tab(), "📄 Log Tail")
+        self._tabs.addTab(self._build_mcp_log_tab(), "🔌 MCP Output")
 
     # ------------------------------------------------------------------
     # Tab 1: Event Log
@@ -263,6 +264,15 @@ class DebugPanel(QWidget):
         if not ctx.skill_registry.names():
             lines.append("  (none)")
 
+        # MCP Servers
+        lines.append("\n═══ MCP Servers ═══")
+        for name, cfg in ctx.mcp_server_registry.all_servers().items():
+            running = ctx.mcp_server_registry.is_running(name)
+            status = "running" if running else "stopped"
+            lines.append(f"  • {name}  [{status}]  cmd={cfg.command}")
+        if not ctx.mcp_server_registry.names():
+            lines.append("  (none)")
+
         self._services_display.setPlainText("\n".join(lines))
 
     # ------------------------------------------------------------------
@@ -320,6 +330,110 @@ class DebugPanel(QWidget):
         else:
             self._log_timer.start(_LOG_POLL_MS)
             self._log_auto.setText("⏸ Pause Auto")
+
+    # ------------------------------------------------------------------
+    # Tab 5: MCP Output
+    # ------------------------------------------------------------------
+
+    def _build_mcp_log_tab(self) -> QWidget:
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(2, 2, 2, 2)
+
+        toolbar = QHBoxLayout()
+        toolbar.addWidget(QLabel("Server:"))
+
+        self._mcp_server_combo = QComboBox()
+        self._mcp_server_combo.setMinimumWidth(180)
+        self._mcp_server_combo.currentTextChanged.connect(
+            self._on_mcp_server_changed)
+        toolbar.addWidget(self._mcp_server_combo)
+
+        refresh_btn = QPushButton("🔄")
+        refresh_btn.setToolTip("Refresh server list")
+        refresh_btn.clicked.connect(self._refresh_mcp_server_list)
+        toolbar.addWidget(refresh_btn)
+
+        toolbar.addStretch()
+
+        clear_btn = QPushButton("Clear")
+        clear_btn.clicked.connect(self._clear_mcp_log)
+        toolbar.addWidget(clear_btn)
+        lay.addLayout(toolbar)
+
+        self._mcp_log_display = QTextEdit()
+        self._mcp_log_display.setReadOnly(True)
+        self._mcp_log_display.setFont(QFont("Consolas", 9))
+        self._mcp_log_display.setLineWrapMode(QTextEdit.NoWrap)
+        lay.addWidget(self._mcp_log_display)
+
+        # Subscribe to MCP output events
+        self._bridge.on(
+            {EventKind.MCP_SERVER_OUTPUT, EventKind.MCP_SERVER_ERROR,
+             EventKind.MCP_SERVER_STARTED, EventKind.MCP_SERVER_STOPPED},
+            self._on_mcp_event)
+
+        # Initial population
+        self._refresh_mcp_server_list()
+        return w
+
+    def _refresh_mcp_server_list(self):
+        """Rebuild the server dropdown from the registry."""
+        registry = self._ctx.mcp_server_registry
+        current = self._mcp_server_combo.currentText()
+        self._mcp_server_combo.blockSignals(True)
+        self._mcp_server_combo.clear()
+        self._mcp_server_combo.addItem("(all)")
+        for name in registry.names():
+            running = registry.is_running(name)
+            label = f"🟢 {name}" if running else f"⚪ {name}"
+            self._mcp_server_combo.addItem(label, name)
+        # Restore previous selection if still present
+        idx = self._mcp_server_combo.findText(current)
+        if idx >= 0:
+            self._mcp_server_combo.setCurrentIndex(idx)
+        self._mcp_server_combo.blockSignals(False)
+        self._on_mcp_server_changed()
+
+    def _on_mcp_server_changed(self):
+        """Populate the display with buffered output for the selected server."""
+        registry = self._ctx.mcp_server_registry
+        name = self._mcp_server_combo.currentData()
+        if name:
+            lines = registry.get_output(name)
+        else:
+            # "(all)" — aggregate all servers
+            lines = []
+            for sname in registry.names():
+                for line in registry.get_output(sname):
+                    lines.append(f"[{sname}] {line}")
+        self._mcp_log_display.setPlainText("\n".join(lines))
+        sb = self._mcp_log_display.verticalScrollBar()
+        sb.setValue(sb.maximum())
+
+    def _on_mcp_event(self, event: Event):
+        """Handle live MCP events."""
+        name = getattr(event, "name", "")
+        kind = event.kind
+
+        if kind in (EventKind.MCP_SERVER_STARTED,
+                    EventKind.MCP_SERVER_STOPPED):
+            self._refresh_mcp_server_list()
+            return
+
+        # Output or error line
+        text = getattr(event, "text", "") or getattr(event, "error", "")
+        selected_name = self._mcp_server_combo.currentData()
+        if selected_name and selected_name != name:
+            return  # filtered out
+
+        prefix = f"[{name}] " if not selected_name else ""
+        self._mcp_log_display.append(f"{prefix}{text}")
+        sb = self._mcp_log_display.verticalScrollBar()
+        sb.setValue(sb.maximum())
+
+    def _clear_mcp_log(self):
+        self._mcp_log_display.clear()
 
     # ------------------------------------------------------------------
     # Close callback

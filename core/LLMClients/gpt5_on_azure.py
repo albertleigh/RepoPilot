@@ -20,6 +20,7 @@ class GPT5OnAzureClient(LLMClient):
     DEFAULT_MODEL = "al-gpt-5"
     DEFAULT_API_VERSION = "2024-12-01-preview"
     MAX_TOKENS = 16384
+    MAX_TOOLS = 128
 
     FIELDS = [
         {

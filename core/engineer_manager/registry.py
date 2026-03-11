@@ -8,6 +8,7 @@ from pathlib import Path
 
 from core.LLMClients.base import LLMClient
 from core.events import EventBus
+from core.mcp.registry import McpServerRegistry
 
 from .manager import EngineerManager
 
@@ -17,9 +18,11 @@ _log = logging.getLogger(__name__)
 class EngineerManagerRegistry:
     """Maps normalised repo paths to live :class:`EngineerManager` instances."""
 
-    def __init__(self, event_bus: EventBus | None = None) -> None:
+    def __init__(self, event_bus: EventBus | None = None,
+                 mcp_server_registry: McpServerRegistry | None = None) -> None:
         self._managers: dict[str, EngineerManager] = {}
         self._event_bus = event_bus
+        self._mcp_server_registry = mcp_server_registry
 
     @staticmethod
     def _key(workdir: Path) -> str:
@@ -44,6 +47,7 @@ class EngineerManagerRegistry:
             workdir, llm_client,
             skills_dir=skills_dir,
             event_bus=self._event_bus,
+            mcp_server_registry=self._mcp_server_registry,
         )
         self._managers[key] = mgr
         if auto_start:
