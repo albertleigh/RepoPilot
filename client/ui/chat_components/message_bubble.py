@@ -9,7 +9,7 @@ from enum import Enum, auto
 from html import escape
 
 from PySide6.QtWidgets import (
-    QFrame, QVBoxLayout, QHBoxLayout, QLabel, QSizePolicy,
+    QFrame, QVBoxLayout, QHBoxLayout, QLabel, QSizePolicy, QMenu, QApplication,
 )
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
@@ -93,7 +93,55 @@ class MessageBubble(QFrame):
         body.setOpenExternalLinks(True)
         body.setStyleSheet("background:transparent;")
         body.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
+        body.setContextMenuPolicy(Qt.CustomContextMenu)
+        body.customContextMenuRequested.connect(
+            lambda pos, lbl=body: self._show_body_menu(lbl, pos)
+        )
         layout.addWidget(body)
+
+    # ------------------------------------------------------------------
+    # Context menu
+    # ------------------------------------------------------------------
+
+    def _show_body_menu(self, label: QLabel, pos):
+        menu = QMenu(self)
+        pal = self.palette()
+        win = pal.window().color()
+        fg = pal.windowText().color()
+        mid = pal.mid().color()
+        highlight = pal.highlight().color()
+        hl_text = pal.highlightedText().color()
+        menu.setStyleSheet(
+            f"QMenu {{"
+            f"  background-color: {_rgb(win)};"
+            f"  color: {_rgb(fg)};"
+            f"  border: 1px solid {_rgba(mid, 0.4)};"
+            f"  border-radius: 6px;"
+            f"  padding: 4px 0;"
+            f"}}"
+            f"QMenu::item {{"
+            f"  padding: 5px 24px;"
+            f"}}"
+            f"QMenu::item:selected {{"
+            f"  background-color: {_rgb(highlight)};"
+            f"  color: {_rgb(hl_text)};"
+            f"}}"
+        )
+        copy_act = menu.addAction("Copy")
+        select_all_act = menu.addAction("Select All")
+        copy_all_act = menu.addAction("Copy All")
+        chosen = menu.exec_(label.mapToGlobal(pos))
+        if chosen == copy_act:
+            selected = label.selectedText()
+            if selected:
+                QApplication.clipboard().setText(selected)
+            else:
+                QApplication.clipboard().setText(label.text())
+        elif chosen == select_all_act:
+            label.setSelection(0, len(label.text()))
+        elif chosen == copy_all_act:
+            label.setSelection(0, len(label.text()))
+            QApplication.clipboard().setText(label.text())
 
     # ------------------------------------------------------------------
     # Palette-derived styling

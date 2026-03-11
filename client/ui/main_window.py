@@ -436,6 +436,7 @@ class MainWindow(QMainWindow):
                 repo_name=repo_name,
                 event_bus=self.ctx.event_bus,
                 workdir=path_str,
+                llm_name=self.ctx.llm_client_registry.selected_name() or "",
             )
             self.chat_tabs.add_tab(tab)
 

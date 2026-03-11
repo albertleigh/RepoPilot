@@ -59,11 +59,13 @@ class EngineerChatTab(BaseChatTab):
         repo_name: str,
         event_bus: EventBus,
         workdir: str,
+        llm_name: str = "",
         parent=None,
     ):
         super().__init__(parent)
         self.repo_name = repo_name
         self._workdir = str(Path(workdir).resolve())
+        self._llm_name = llm_name
 
         # Customise input bar
         self.input_bar.set_placeholder("Type instructions for the agent\u2026")
@@ -103,6 +105,12 @@ class EngineerChatTab(BaseChatTab):
         )
         self._header_label.setTextFormat(Qt.RichText)
         layout.addWidget(self._header_label)
+
+        # LLM badge
+        self._llm_badge = QLabel()
+        self._llm_badge.setTextFormat(Qt.RichText)
+        self._update_llm_badge()
+        layout.addWidget(self._llm_badge)
 
         layout.addStretch()
 
@@ -147,6 +155,21 @@ class EngineerChatTab(BaseChatTab):
             f"color: {_rgba(fg, 0.5)}; font-size: 12px; padding: 2px 8px;"
             f"border: 1px solid {_rgba(mid, 0.3)}; border-radius: 4px;"
         )
+        self._llm_badge.setStyleSheet(
+            f"color: {_rgba(fg, 0.45)}; font-size: 11px;"
+            f"border: 1px solid {_rgba(mid, 0.25)}; border-radius: 3px;"
+            f"padding: 1px 6px;"
+        )
+
+    def _update_llm_badge(self):
+        name = self._llm_name or "no LLM"
+        self._llm_badge.setText(f"\u2699\ufe0f {name}")
+        self._llm_badge.setToolTip(f"Current LLM: {name}")
+
+    def set_llm_name(self, name: str):
+        """Update the displayed LLM name."""
+        self._llm_name = name
+        self._update_llm_badge()
 
     # ------------------------------------------------------------------
     # Event handling — self-subscribed via own QtEventBridge
