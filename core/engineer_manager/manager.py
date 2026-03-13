@@ -153,7 +153,7 @@ class EngineerManager:
         w = self.workdir
         return {
             "bash":             lambda **kw: run_bash(w, kw["command"]),
-            "read_file":        lambda **kw: run_read(w, kw["path"], kw.get("limit")),
+            "read_file":        lambda **kw: run_read(w, kw["path"], kw.get("start_line"), kw.get("end_line")),
             "write_file":       lambda **kw: run_write(w, kw["path"], kw["content"]),
             "edit_file":        lambda **kw: run_edit(w, kw["path"], kw["old_text"], kw["new_text"]),
             "TodoWrite":        lambda **kw: self._handle_todo_write(kw["items"]),
@@ -186,8 +186,8 @@ class EngineerManager:
         sub_tools: list[dict] = [
             {"name": "bash", "description": "Run command.",
              "input_schema": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}},
-            {"name": "read_file", "description": "Read file.",
-             "input_schema": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}},
+            {"name": "read_file", "description": "Read file. Returns numbered lines. Use start_line/end_line for large files.",
+             "input_schema": {"type": "object", "properties": {"path": {"type": "string"}, "start_line": {"type": "integer"}, "end_line": {"type": "integer"}}, "required": ["path"]}},
         ]
         if agent_type != "Explore":
             sub_tools += [
@@ -198,7 +198,7 @@ class EngineerManager:
             ]
         sub_handlers = {
             "bash":       lambda **kw: run_bash(self.workdir, kw["command"]),
-            "read_file":  lambda **kw: run_read(self.workdir, kw["path"]),
+            "read_file":  lambda **kw: run_read(self.workdir, kw["path"], start_line=kw.get("start_line"), end_line=kw.get("end_line")),
             "write_file": lambda **kw: run_write(self.workdir, kw["path"], kw["content"]),
             "edit_file":  lambda **kw: run_edit(self.workdir, kw["path"], kw["old_text"], kw["new_text"]),
         }

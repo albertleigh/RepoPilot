@@ -41,18 +41,23 @@ PM_TOOLS: list[dict] = [
     {
         "name": "read_file",
         "description": (
-            "Read a file from any registered repository. "
-            "Use to understand code, review engineer output, or gather "
-            "context before making decisions."
+            "Read a file from any registered repository. Returns numbered lines "
+            "with a metadata header. For large files, specify start_line/end_line "
+            "to read a specific range. If output is truncated you will see a hint "
+            "with the next start_line to continue reading."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "repo": {"type": "string", "description": "Repository display name."},
                 "path": {"type": "string", "description": "Relative path within the repo."},
-                "limit": {
+                "start_line": {
                     "type": "integer",
-                    "description": "Max lines to read (omit for all).",
+                    "description": "1-based inclusive start line (optional).",
+                },
+                "end_line": {
+                    "type": "integer",
+                    "description": "1-based inclusive end line (optional).",
                 },
             },
             "required": ["repo", "path"],

@@ -21,8 +21,8 @@ IDLE_TIMEOUT = 60
 TEAMMATE_TOOLS: list[dict] = [
     {"name": "bash", "description": "Run command.",
      "input_schema": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}},
-    {"name": "read_file", "description": "Read file.",
-     "input_schema": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}},
+    {"name": "read_file", "description": "Read file. Returns numbered lines. Use start_line/end_line for large files.",
+     "input_schema": {"type": "object", "properties": {"path": {"type": "string"}, "start_line": {"type": "integer"}, "end_line": {"type": "integer"}}, "required": ["path"]}},
     {"name": "write_file", "description": "Write file.",
      "input_schema": {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]}},
     {"name": "edit_file", "description": "Edit file.",
@@ -106,7 +106,7 @@ class TeammateManager:
 
         dispatch = {
             "bash": lambda **kw: run_bash(workdir, kw["command"]),
-            "read_file": lambda **kw: run_read(workdir, kw["path"]),
+            "read_file": lambda **kw: run_read(workdir, kw["path"], start_line=kw.get("start_line"), end_line=kw.get("end_line")),
             "write_file": lambda **kw: run_write(workdir, kw["path"], kw["content"]),
             "edit_file": lambda **kw: run_edit(workdir, kw["path"], kw["old_text"], kw["new_text"]),
             "send_message": lambda **kw: self.bus.send(name, kw["to"], kw["content"]),

@@ -154,7 +154,7 @@ class ProjectManager:
         return {
             # -- direct repo access (reuses engineer base_tools) --
             "bash":                lambda **kw: self._repo_tool(kw["repo"], run_bash, kw["command"]),
-            "read_file":           lambda **kw: self._repo_tool(kw["repo"], run_read, kw["path"], kw.get("limit")),
+            "read_file":           lambda **kw: self._repo_tool(kw["repo"], run_read, kw["path"], kw.get("start_line"), kw.get("end_line")),
             "write_file":          lambda **kw: self._repo_tool(kw["repo"], run_write, kw["path"], kw["content"]),
             "edit_file":           lambda **kw: self._repo_tool(kw["repo"], run_edit, kw["path"], kw["old_text"], kw["new_text"]),
             # -- planning --

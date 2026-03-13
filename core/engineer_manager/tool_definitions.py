@@ -21,12 +21,24 @@ TOOLS: list[dict] = [
     },
     {
         "name": "read_file",
-        "description": "Read file contents.",
+        "description": (
+            "Read file contents. Returns numbered lines with a metadata header. "
+            "For large files, specify start_line/end_line to read a specific "
+            "range. If output is truncated you will see a hint with the next "
+            "start_line to continue reading."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "path": {"type": "string"},
-                "limit": {"type": "integer"},
+                "path": {"type": "string", "description": "Relative file path."},
+                "start_line": {
+                    "type": "integer",
+                    "description": "1-based inclusive start line (optional).",
+                },
+                "end_line": {
+                    "type": "integer",
+                    "description": "1-based inclusive end line (optional).",
+                },
             },
             "required": ["path"],
         },
