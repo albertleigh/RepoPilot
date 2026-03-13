@@ -198,26 +198,26 @@ class EngineerChatTab(BaseChatTab):
         self.display.hide_thinking()
 
         if isinstance(event, EngineerMessageEvent):
-            self.display.add_assistant_message(
+            self.add_assistant_message(
                 event.text, sender="Engineer", avatar="\U0001F916",
             )
         elif isinstance(event, EngineerUserMessageEvent):
             sender = event.source or "External"
-            self.display.add_user_message(
+            self.add_user_message(
                 event.text, sender=sender, avatar="\U0001F4CB",
             )
         elif isinstance(event, EngineerToolCallEvent):
-            self.display.add_tool_call(event.tool_name, str(event.tool_input))
+            self.add_tool_call(event.tool_name, str(event.tool_input))
         elif isinstance(event, EngineerToolResultEvent):
-            self.display.add_tool_result(event.tool_name, event.output)
+            self.add_tool_result(event.tool_name, event.output)
         elif isinstance(event, EngineerErrorEvent):
-            self.display.add_error(event.error)
+            self.add_error(event.error)
         elif isinstance(event, EngineerStartedEvent):
             self._set_running(True)
-            self.display.add_status("Engineer started.")
+            self.add_status("Engineer started.")
         elif isinstance(event, EngineerStoppedEvent):
             self._set_running(False)
-            self.display.add_status("Engineer stopped.")
+            self.add_status("Engineer stopped.")
 
     def _set_running(self, running: bool):
         if running:

@@ -11,6 +11,8 @@ Sub-classes only need to:
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 from PySide6.QtWidgets import (
     QHBoxLayout, QPushButton, QSizePolicy, QVBoxLayout, QWidget,
 )
@@ -18,6 +20,7 @@ from PySide6.QtCore import Qt, Signal
 
 from .base_tab import BaseTab
 from client.ui.chat_components import ChatDisplay, ChatInputBar
+from client.ui.chat_components.chat_history import ChatHistory, ChatHistoryEntry
 
 
 class BaseChatTab(BaseTab):
@@ -26,9 +29,15 @@ class BaseChatTab(BaseTab):
     message_sent = Signal(str)
     stop_requested = Signal()  # emitted when the user clicks stop
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        *,
+        base_dir: Path | None = None,
+        session_id: str | None = None,
+    ) -> None:
         super().__init__(parent)
-        self._message_history: list[dict] = []
+        self._history = ChatHistory(session_id=session_id, base_dir=base_dir)
         self._init_chat_layout()
 
     # ------------------------------------------------------------------
@@ -48,6 +57,7 @@ class BaseChatTab(BaseTab):
 
         # Message display
         self.display = ChatDisplay()
+        self.display.reached_top.connect(self._on_reached_top)
         root.addWidget(self.display, stretch=1)
 
         # Stop-button row (hidden by default)
@@ -91,7 +101,7 @@ class BaseChatTab(BaseTab):
     def _on_submit(self, text: str):
         """Called when the user presses Send."""
         self.display.add_user_message(text)
-        self._record("user", text)
+        self._record_entry(ChatHistoryEntry("message", role="user", text=text))
         self.message_sent.emit(text)
 
     # ------------------------------------------------------------------
@@ -100,17 +110,31 @@ class BaseChatTab(BaseTab):
 
     def add_user_message(self, text: str, **kw):
         self.display.add_user_message(text, **kw)
-        self._record("user", text)
+        self._record_entry(ChatHistoryEntry("message", role="user", text=text))
 
     def add_assistant_message(self, text: str, **kw):
         self.display.add_assistant_message(text, **kw)
-        self._record("assistant", text)
+        self._record_entry(ChatHistoryEntry("message", role="assistant", text=text))
+
+    def add_tool_call(self, tool_name: str, tool_input: str, **kw):
+        self.display.add_tool_call(tool_name, tool_input, **kw)
+        self._record_entry(ChatHistoryEntry(
+            "tool_call", text=tool_input, extra={"tool_name": tool_name},
+        ))
+
+    def add_tool_result(self, tool_name: str, output: str, **kw):
+        self.display.add_tool_result(tool_name, output, **kw)
+        self._record_entry(ChatHistoryEntry(
+            "tool_result", text=output, extra={"tool_name": tool_name},
+        ))
 
     def add_status(self, text: str):
         self.display.add_status(text)
+        self._record_entry(ChatHistoryEntry("status", text=text))
 
     def add_error(self, text: str):
         self.display.add_error(text)
+        self._record_entry(ChatHistoryEntry("error", text=text))
 
     def show_stop_button(self):
         """Show the stop button (call when a long-running session starts)."""
@@ -122,20 +146,125 @@ class BaseChatTab(BaseTab):
 
     def clear_chat(self):
         self.display.clear()
-        self._message_history.clear()
+        self._history = ChatHistory(base_dir=self._history._base_dir)
 
     # ------------------------------------------------------------------
-    # History
+    # Windowed history — scroll-up loading
     # ------------------------------------------------------------------
 
-    def _record(self, role: str, text: str):
-        from datetime import datetime
-        self._message_history.append({
-            "role": role,
-            "text": text,
-            "timestamp": datetime.now().isoformat(),
-        })
+    def _on_reached_top(self) -> None:
+        """User scrolled near the top — prepend older entries if available."""
+        if not self._history.has_older():
+            self.display.finish_prepend()
+            return
+        older = self._history.load_older()
+        if not older:
+            self.display.finish_prepend()
+            return
+        wrappers = self._render_entries(older)
+        self.display.prepend_widgets(wrappers)
+
+    def _render_entries(self, entries: list[ChatHistoryEntry]) -> list[QWidget]:
+        """Create wrapped widgets for a list of history entries.
+
+        Used when prepending older entries that were loaded from disk.
+        Returned wrappers are NOT added to the display's item list here —
+        that is handled by :meth:`ChatDisplay.prepend_widgets`.
+        """
+        from client.ui.chat_components import (
+            MessageBubble, MessageRole, ToolCallWidget,
+            StatusWidget, ToolCallGroup,
+        )
+
+        wrappers: list[QWidget] = []
+        # Group consecutive tool_call / tool_result entries
+        pending_tools: list[ChatHistoryEntry] = []
+
+        def _flush_tools():
+            nonlocal pending_tools
+            if not pending_tools:
+                return
+            group = ToolCallGroup()
+            for te in pending_tools:
+                ts_short = _short_ts(te.timestamp)
+                name = te.extra.get("tool_name", "tool")
+                if te.kind == "tool_call":
+                    group.add_tool_call(name, te.text, ts_short)
+                else:
+                    group.add_tool_result(name, te.text, ts_short)
+            group.collapse()
+            wrappers.append(_wrap(group, Qt.AlignLeft))
+            pending_tools = []
+
+        for entry in entries:
+            if entry.kind in ("tool_call", "tool_result"):
+                pending_tools.append(entry)
+                continue
+
+            _flush_tools()
+
+            ts_short = _short_ts(entry.timestamp)
+            if entry.kind == "message":
+                if entry.role == "user":
+                    bubble = MessageBubble(
+                        MessageRole.USER, "You", entry.text, ts_short,
+                    )
+                    wrappers.append(_wrap(bubble, Qt.AlignRight))
+                else:
+                    bubble = MessageBubble(
+                        MessageRole.ASSISTANT, "Assistant", entry.text, ts_short,
+                        avatar="\U0001F916",
+                    )
+                    wrappers.append(_wrap(bubble, Qt.AlignLeft))
+            elif entry.kind == "status":
+                wrappers.append(_wrap(StatusWidget(entry.text, ts_short), Qt.AlignHCenter))
+            elif entry.kind == "error":
+                wrappers.append(_wrap(StatusWidget(entry.text, ts_short, is_error=True), Qt.AlignHCenter))
+
+        _flush_tools()
+        return wrappers
+
+    # ------------------------------------------------------------------
+    # History access
+    # ------------------------------------------------------------------
+
+    def _record_entry(self, entry: ChatHistoryEntry) -> None:
+        self._history.append(entry)
 
     @property
     def message_history(self) -> list[dict]:
-        return list(self._message_history)
+        """Backward-compatible accessor — returns dicts for all entries."""
+        return [e.to_dict() for e in self._history.all_entries()]
+
+
+# ======================================================================
+# Module-level helpers
+# ======================================================================
+
+def _short_ts(iso: str) -> str:
+    """Extract HH:MM from an ISO timestamp string."""
+    try:
+        return iso[11:16]  # "2026-03-14T09:42:17.123" → "09:42"
+    except Exception:
+        return ""
+
+
+def _wrap(widget: QWidget, align: Qt.AlignmentFlag) -> QWidget:
+    """Wrap *widget* in an aligned row — mirrors ChatDisplay._insert logic."""
+    row = QHBoxLayout()
+    row.setContentsMargins(0, 0, 0, 0)
+    row.setSpacing(0)
+    if align == Qt.AlignRight:
+        row.addStretch(1)
+        row.addWidget(widget)
+    elif align == Qt.AlignHCenter:
+        row.addStretch(1)
+        row.addWidget(widget)
+        row.addStretch(1)
+    else:
+        row.addWidget(widget)
+        row.addStretch(1)
+    wrapper = QWidget()
+    wrapper.setStyleSheet("background:transparent;")
+    wrapper.setLayout(row)
+    return wrapper

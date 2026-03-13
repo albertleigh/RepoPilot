@@ -198,27 +198,27 @@ class ProjectManagerChatTab(BaseChatTab):
         self.display.hide_thinking()
 
         if isinstance(event, PMMessageEvent):
-            self.display.add_assistant_message(
+            self.add_assistant_message(
                 event.text, sender="Project Manager", avatar="\U0001F4CB",
             )
         elif isinstance(event, PMToolCallEvent):
-            self.display.add_tool_call(event.tool_name, str(event.tool_input))
+            self.add_tool_call(event.tool_name, str(event.tool_input))
         elif isinstance(event, PMToolResultEvent):
-            self.display.add_tool_result(event.tool_name, event.output)
+            self.add_tool_result(event.tool_name, event.output)
         elif isinstance(event, PMErrorEvent):
-            self.display.add_error(event.error)
+            self.add_error(event.error)
         elif isinstance(event, PMStartedEvent):
             self._set_running(True)
-            self.display.add_status("Project Manager started.")
+            self.add_status("Project Manager started.")
         elif isinstance(event, PMStoppedEvent):
             self._set_running(False)
-            self.display.add_status("Project Manager stopped.")
+            self.add_status("Project Manager stopped.")
         elif isinstance(event, PMTaskDispatchedEvent):
-            self.display.add_status(
+            self.add_status(
                 f"\u2709\ufe0f Task dispatched to {event.repo} [{event.dispatch_id}]"
             )
         elif isinstance(event, PMTaskVerifiedEvent):
-            self.display.add_status(
+            self.add_status(
                 f"\u2705 Verification requested for {event.repo}"
             )
 

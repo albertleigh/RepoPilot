@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
     QScrollArea, QWidget, QVBoxLayout, QHBoxLayout,
     QFrame, QSizePolicy,
 )
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, Signal
 
 from .message_bubble import MessageBubble, MessageRole
 from .tool_call_group import ToolCallGroup
@@ -23,6 +23,10 @@ from .thinking_indicator import ThinkingIndicator
 
 class ChatDisplay(QScrollArea):
     """Chat message feed with auto-scroll and themed background."""
+
+    reached_top = Signal()  # emitted when user scrolls near the top
+
+    _SCROLL_TOP_THRESHOLD = 50  # pixels from top to trigger load-more
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -50,6 +54,10 @@ class ChatDisplay(QScrollArea):
         # Active tool-call group (expanded while streaming)
         self._pending_group: ToolCallGroup | None = None
         self._pending_group_wrapper: QWidget | None = None
+
+        # Scroll-near-top detection
+        self._loading_older = False
+        self.verticalScrollBar().valueChanged.connect(self._on_scroll)
 
         self._apply_style()
 
@@ -225,6 +233,36 @@ class ChatDisplay(QScrollArea):
     def _scroll_to_bottom(self):
         sb = self.verticalScrollBar()
         sb.setValue(sb.maximum())
+
+    def _on_scroll(self, value: int) -> None:
+        """Emit *reached_top* when the user scrolls close to the top."""
+        if value <= self._SCROLL_TOP_THRESHOLD and not self._loading_older:
+            self._loading_older = True
+            self.reached_top.emit()
+
+    def finish_prepend(self) -> None:
+        """Call after prepend batch is done so future scroll-ups fire again."""
+        self._loading_older = False
+
+    def prepend_widgets(self, wrappers: list[QWidget]) -> None:
+        """Insert *wrappers* at the very top of the feed (index 0).
+
+        Preserves the current scroll position so the user doesn't jump.
+        """
+        sb = self.verticalScrollBar()
+        old_max = sb.maximum()
+        old_val = sb.value()
+
+        for i, wrapper in enumerate(wrappers):
+            self._layout.insertWidget(i, wrapper)
+            self._items.insert(i, wrapper)
+
+        # After Qt processes the new geometry, restore relative scroll
+        def _restore():
+            new_max = sb.maximum()
+            sb.setValue(old_val + (new_max - old_max))
+            self._loading_older = False
+        QTimer.singleShot(30, _restore)
 
     def _constrain_bubble(self, bubble: MessageBubble):
         vp = self.viewport().width()
