@@ -120,6 +120,23 @@ TOOLS: list[dict] = [
             "required": ["name"],
         },
     },
+    {
+        "name": "create_skill",
+        "description": (
+            "Create a new reusable skill (SKILL.md) in the skills directory. "
+            "Use this to capture domain knowledge, workflow recipes, or patterns "
+            "discovered during work so they can be loaded later."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Skill identifier (used as folder name)."},
+                "description": {"type": "string", "description": "One-line summary of what the skill covers."},
+                "content": {"type": "string", "description": "Markdown body with the skill's knowledge/instructions."},
+            },
+            "required": ["name", "description", "content"],
+        },
+    },
     # -- compression --
     {
         "name": "compress",

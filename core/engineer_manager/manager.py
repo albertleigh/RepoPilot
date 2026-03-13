@@ -159,6 +159,7 @@ class EngineerManager:
             "TodoWrite":        lambda **kw: self._handle_todo_write(kw["items"]),
             "task":             lambda **kw: self._run_subagent(kw["prompt"], kw.get("agent_type", "Explore")),
             "load_skill":       lambda **kw: self._handle_load_skill(kw["name"]),
+            "create_skill":    lambda **kw: self._handle_create_skill(kw["name"], kw["description"], kw["content"]),
             "compress":         lambda **kw: "Compressing...",
             "background_run":   lambda **kw: self.bg.run(kw["command"], kw.get("timeout", 120)),
             "check_background": lambda **kw: self.bg.check(kw.get("task_id")),
@@ -276,6 +277,32 @@ class EngineerManager:
             self._emit_event(SkillRegisteredEvent(name=name))
         return result
 
+    def _handle_create_skill(self, name: str, description: str, content: str) -> str:
+        """Create a new SKILL.md in the skills directory."""
+        skills_dir = self.skills._skills.get("__dir__") or (self.workdir / "skills")
+        if isinstance(skills_dir, str):
+            skills_dir = Path(skills_dir)
+        # Use the actual skills directory from the loader
+        base = self.workdir / "skills"
+        skill_folder = base / name
+        if skill_folder.exists():
+            return f"Error: Skill '{name}' already exists at {skill_folder}"
+        skill_folder.mkdir(parents=True, exist_ok=True)
+        skill_md = skill_folder / "SKILL.md"
+        frontmatter = (
+            f"---\n"
+            f"name: {name}\n"
+            f"description: {description}\n"
+            f"---\n\n"
+        )
+        skill_md.write_text(frontmatter + content, encoding="utf-8")
+        # Reload into the skill loader's in-memory cache
+        from core.skills.skill_registry import SkillRegistry
+        meta, body = SkillRegistry.parse_skill_md(skill_md.read_text(encoding="utf-8"))
+        self.skills._skills[name] = {"meta": meta, "body": body}
+        self._emit_event(SkillRegisteredEvent(name=name))
+        return f"Skill '{name}' created at {skill_folder}/SKILL.md"
+
     def _handle_shutdown_request_with_event(self, teammate: str) -> str:
         result = self._handle_shutdown_request(teammate)
         self._emit_event(TeammateStoppedEvent(
@@ -318,7 +345,9 @@ class EngineerManager:
             "Prefer task_create/task_update/task_list for multi-step work. "
             "Use TodoWrite for short checklists.\n"
             "Use task for subagent delegation. "
-            "Use load_skill for specialized knowledge.\n"
+            "Use load_skill for specialized knowledge. "
+            "Use create_skill to capture reusable patterns, domain knowledge, "
+            "or workflow recipes as new skills for future use.\n"
             f"Skills: {self.skills.descriptions()}"
         )
 
