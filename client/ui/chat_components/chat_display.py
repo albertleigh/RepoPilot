@@ -1,7 +1,7 @@
 """Scrollable chat message display.
 
 A ``QScrollArea`` that hosts a vertical list of :class:`MessageBubble`,
-:class:`ToolCallWidget`, and :class:`StatusWidget` instances.  Provides a
+:class:`ToolCallGroup`, and :class:`StatusWidget` instances.  Provides a
 simple API for adding different message types and auto-scrolls to the
 latest entry.
 """
@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QTimer
 
 from .message_bubble import MessageBubble, MessageRole
-from .tool_call_widget import ToolCallWidget
+from .tool_call_group import ToolCallGroup
 from .status_widget import StatusWidget
 from .thinking_indicator import ThinkingIndicator
 
@@ -47,6 +47,10 @@ class ChatDisplay(QScrollArea):
         self._thinking: QWidget | None = None      # current thinking row
         self._thinking_indicator: ThinkingIndicator | None = None
 
+        # Active tool-call group (expanded while streaming)
+        self._pending_group: ToolCallGroup | None = None
+        self._pending_group_wrapper: QWidget | None = None
+
         self._apply_style()
 
     # ------------------------------------------------------------------
@@ -73,6 +77,7 @@ class ChatDisplay(QScrollArea):
         avatar: str = "\U0001F916",
         timestamp: str | None = None,
     ):
+        self._collapse_pending_group()
         ts = timestamp or self._ts()
         bubble = MessageBubble(MessageRole.ASSISTANT, sender, text, ts, avatar=avatar)
         self._insert(bubble, align=Qt.AlignLeft)
@@ -85,8 +90,9 @@ class ChatDisplay(QScrollArea):
         timestamp: str | None = None,
     ):
         ts = timestamp or self._ts()
-        widget = ToolCallWidget(tool_name, tool_input, ts, is_result=False)
-        self._insert(widget, align=Qt.AlignLeft)
+        group = self._ensure_pending_group()
+        group.add_tool_call(tool_name, tool_input, ts)
+        QTimer.singleShot(20, self._scroll_to_bottom)
 
     def add_tool_result(
         self,
@@ -96,8 +102,9 @@ class ChatDisplay(QScrollArea):
         timestamp: str | None = None,
     ):
         ts = timestamp or self._ts()
-        widget = ToolCallWidget(tool_name, output, ts, is_result=True)
-        self._insert(widget, align=Qt.AlignLeft)
+        group = self._ensure_pending_group()
+        group.add_tool_result(tool_name, output, ts)
+        QTimer.singleShot(20, self._scroll_to_bottom)
 
     def add_status(self, text: str, *, timestamp: str | None = None):
         ts = timestamp or self._ts()
@@ -144,6 +151,8 @@ class ChatDisplay(QScrollArea):
             w.setParent(None)
             w.deleteLater()
         self._items.clear()
+        self._pending_group = None
+        self._pending_group_wrapper = None
         self.hide_thinking()
 
     # ------------------------------------------------------------------
@@ -153,6 +162,33 @@ class ChatDisplay(QScrollArea):
     @staticmethod
     def _ts() -> str:
         return datetime.now().strftime("%H:%M")
+
+    def _ensure_pending_group(self) -> ToolCallGroup:
+        """Return the current open tool-call group, creating one if needed."""
+        if self._pending_group is None:
+            group = ToolCallGroup()
+            self._pending_group = group
+            # Wrap in a left-aligned row like other items
+            row = QHBoxLayout()
+            row.setContentsMargins(0, 0, 0, 0)
+            row.setSpacing(0)
+            row.addWidget(group)
+            row.addStretch(1)
+            wrapper = QWidget()
+            wrapper.setStyleSheet("background:transparent;")
+            wrapper.setLayout(row)
+            idx = max(self._layout.count() - 1, 0)
+            self._layout.insertWidget(idx, wrapper)
+            self._items.append(wrapper)
+            self._pending_group_wrapper = wrapper
+        return self._pending_group
+
+    def _collapse_pending_group(self) -> None:
+        """Collapse the active tool-call group (called when a text message arrives)."""
+        if self._pending_group is not None:
+            self._pending_group.collapse()
+            self._pending_group = None
+            self._pending_group_wrapper = None
 
     def _insert(self, widget: QWidget, align: Qt.AlignmentFlag):
         """Wrap *widget* in a row with the desired alignment and add it."""
