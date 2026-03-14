@@ -86,7 +86,8 @@ class GPT5CodexOnAzureClient(LLMClient):
         return self.send_messages(messages)
 
     def send_messages(self, messages: list[dict]) -> str:
-        response = self._client.chat.completions.create(
+        response = self._call_with_retry(
+            self._client.chat.completions.create,
             model=self._model_id,
             max_completion_tokens=self.MAX_TOKENS,
             messages=messages,
@@ -136,7 +137,8 @@ class GPT5CodexOnAzureClient(LLMClient):
         if system:
             msgs.insert(0, {"role": "system", "content": system})
 
-        response = self._client.chat.completions.create(
+        response = self._call_with_retry(
+            self._client.chat.completions.create,
             model=self._model_id,
             max_completion_tokens=self.MAX_TOKENS,
             messages=msgs,

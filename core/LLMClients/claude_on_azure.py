@@ -71,7 +71,8 @@ class ClaudeOnAzureClient(LLMClient):
         return self.send_messages(messages)
 
     def send_messages(self, messages: list[dict]) -> str:
-        response = self._client.messages.create(
+        response = self._call_with_retry(
+            self._client.messages.create,
             model=self._model_id,
             max_tokens=self.MAX_TOKENS,
             messages=messages,
@@ -109,7 +110,7 @@ class ClaudeOnAzureClient(LLMClient):
         }
         if system:
             kwargs["system"] = system
-        response = self._client.messages.create(**kwargs)
+        response = self._call_with_retry(self._client.messages.create, **kwargs)
 
         text_parts: list[str] = []
         tool_calls: list[ToolCall] = []

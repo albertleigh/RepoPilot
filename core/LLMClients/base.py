@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -57,6 +58,35 @@ class LLMClient(ABC):
     PROVIDER: str = ""
     MAX_TOOLS: int = 128
     FIELDS: list[dict] = []
+    RETRY_MAX_ATTEMPTS: int = 3
+    RETRY_WAIT_SECONDS: int = 60
+
+    def _call_with_retry(self, func, *args, **kwargs):
+        """Call *func* with automatic retry on rate-limit (HTTP 429) errors.
+
+        Retries up to ``RETRY_MAX_ATTEMPTS`` times, waiting
+        ``RETRY_WAIT_SECONDS`` between each attempt.  Raises the
+        original exception if all attempts are exhausted.
+        """
+        last_exc: Exception | None = None
+        for attempt in range(1, self.RETRY_MAX_ATTEMPTS + 1):
+            try:
+                return func(*args, **kwargs)
+            except Exception as exc:
+                status = getattr(exc, "status_code", None)
+                if status == 429 and attempt < self.RETRY_MAX_ATTEMPTS:
+                    _log.warning(
+                        "Rate limit hit (attempt %d/%d). "
+                        "Retrying in %ds…",
+                        attempt,
+                        self.RETRY_MAX_ATTEMPTS,
+                        self.RETRY_WAIT_SECONDS,
+                    )
+                    last_exc = exc
+                    time.sleep(self.RETRY_WAIT_SECONDS)
+                    continue
+                raise
+        raise last_exc  # should not be reached, but keeps linters happy
 
     @abstractmethod
     def provider_name(self) -> str:
