@@ -12,6 +12,7 @@ develop-eggs/
 dist/
 release/
 downloads/
+skills/
 eggs/
 .eggs/
 lib/

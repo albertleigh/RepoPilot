@@ -75,113 +75,168 @@ class WelcomeTab(BaseTab):
                     color: {c['fg']};
                 }}
                 .container {{
-                    max-width: 800px;
+                    max-width: 820px;
                     margin: 0 auto;
                     background-color: {c['container_bg']};
-                    padding: 40px;
-                    border-radius: 10px;
+                    padding: 48px 44px;
+                    border-radius: 12px;
                     border: 1px solid {c['mid']};
                 }}
                 h1 {{
                     color: {c['fg']};
                     text-align: center;
-                    margin-bottom: 10px;
+                    margin-bottom: 4px;
+                    font-size: 28px;
+                    font-weight: 700;
                 }}
                 .subtitle {{
                     text-align: center;
                     color: {c['muted_fg']};
-                    margin-bottom: 40px;
-                    font-size: 18px;
+                    margin-bottom: 36px;
+                    font-size: 16px;
+                    line-height: 1.5;
                 }}
                 h2 {{
                     color: {c['fg']};
                     border-bottom: 2px solid {c['highlight']};
-                    padding-bottom: 10px;
-                    margin-top: 30px;
+                    padding-bottom: 8px;
+                    margin-top: 32px;
+                    font-size: 18px;
+                }}
+                .hero {{
+                    text-align: center;
+                    margin-bottom: 8px;
+                }}
+                .hero .icon {{
+                    font-size: 56px;
+                    margin-bottom: 4px;
                 }}
                 .getting-started {{
                     background-color: {c['subtle_bg']};
-                    padding: 20px;
-                    border-radius: 5px;
+                    padding: 22px 26px;
+                    border-radius: 8px;
                     margin: 20px 0;
                     border: 1px solid {c['mid']};
                 }}
                 .getting-started ol {{
-                    margin: 10px 0;
-                    padding-left: 25px;
+                    margin: 10px 0 0 0;
+                    padding-left: 22px;
                 }}
                 .getting-started li {{
                     margin: 10px 0;
                     line-height: 1.6;
                 }}
-                .feature-list {{
-                    list-style: none;
-                    padding: 0;
+                .card-grid {{
+                    display: flex;
+                    flex-wrap: wrap;
+                    gap: 14px;
+                    margin: 18px 0;
                 }}
-                .feature-list li {{
-                    padding: 12px 0;
-                    border-bottom: 1px solid {c['mid']};
+                .card {{
+                    flex: 1 1 45%;
+                    background-color: {c['subtle_bg']};
+                    border: 1px solid {c['mid']};
+                    border-radius: 8px;
+                    padding: 16px 18px;
+                }}
+                .card .card-title {{
+                    font-weight: 600;
+                    margin-bottom: 4px;
+                }}
+                .card .card-desc {{
+                    color: {c['muted_fg']};
+                    font-size: 13px;
+                    line-height: 1.5;
                 }}
                 .shortcut-table {{
                     width: 100%;
-                    margin: 20px 0;
+                    margin: 16px 0;
                     border-collapse: collapse;
                 }}
                 .shortcut-table td {{
-                    padding: 10px;
+                    padding: 9px 12px;
                     border: 1px solid {c['mid']};
+                    font-size: 13px;
                 }}
                 .shortcut-table .key {{
                     background-color: {c['subtle_bg']};
-                    font-family: monospace;
+                    font-family: 'Consolas', 'Courier New', monospace;
                     font-weight: bold;
-                    width: 150px;
-                }}
-                .icon {{
-                    font-size: 48px;
-                    text-align: center;
-                    margin: 20px 0;
+                    width: 120px;
                 }}
                 kbd {{
                     background-color: {c['subtle_bg']};
                     border: 1px solid {c['mid']};
                     border-radius: 3px;
-                    padding: 1px 5px;
-                    font-family: monospace;
+                    padding: 1px 6px;
+                    font-family: 'Consolas', 'Courier New', monospace;
+                    font-size: 12px;
+                }}
+                .footer {{
+                    text-align: center;
+                    color: {c['muted_fg']};
+                    font-size: 12px;
+                    margin-top: 32px;
                 }}
             </style>
         </head>
         <body>
             <div class="container">
-                <div class="icon">🤖</div>
-                <h1>Welcome to RepoCode</h1>
-                <p class="subtitle">Your AI-Powered Repository Documentation Assistant</p>
-                
+                <div class="hero">
+                    <div class="icon">🤖</div>
+                    <h1>RepoPilot</h1>
+                </div>
+                <p class="subtitle">
+                    AI-powered coding agent that lives in your desktop.<br>
+                    Explore, understand, and transform any codebase &mdash; backed by the LLM of your choice.
+                </p>
+
                 <div class="getting-started">
-                    <h2>🚀 Getting Started</h2>
+                    <h2 style="margin-top: 0; border: none; padding: 0;">🚀 Getting Started</h2>
                     <ol>
-                        <li><strong>Add a Repository</strong>: Click the <strong>+</strong> button in the "Repositories" panel to add your codebase</li>
-                        <li><strong>Configure LLM</strong>: Select or add an LLM client from the "LLM Clients" panel</li>
-                        <li><strong>Start Chatting</strong>: Press <kbd>Ctrl+T</kbd> or use <strong>File → Add Tab</strong> to open a new conversation</li>
-                        <li><strong>Ask Questions</strong>: Start asking questions about your code, documentation, or repository structure!</li>
+                        <li><strong>Add a Repository</strong> &mdash; click <strong>+</strong> in the Repositories panel and select a folder.</li>
+                        <li><strong>Configure an LLM</strong> &mdash; click <strong>+</strong> in the LLM Clients panel and enter your provider credentials.</li>
+                        <li><strong>Start the Engineer</strong> &mdash; right-click the repo and choose <em>Start Engineer</em>.</li>
+                        <li><strong>Chat</strong> &mdash; ask the agent to explain, refactor, or extend your code.</li>
                     </ol>
                 </div>
-                
-                <h2>✨ Features</h2>
-                <ul class="feature-list">
-                    <li>✓ Multi-repository support - Chat about multiple codebases</li>
-                    <li>✓ Multiple LLM providers - OpenAI, Anthropic, Google, and local models</li>
-                    <li>✓ Tab-based conversations - Keep multiple chats open simultaneously</li>
-                    <li>✓ Context-aware search - Find relevant code and documentation</li>
-                    <li>✓ Code analysis - Get insights about your repository structure</li>
-                </ul>
-                
+
+                <h2>✨ Capabilities</h2>
+                <table class="card-grid" cellspacing="0" cellpadding="0" style="border: none;">
+                    <tr>
+                        <td class="card" style="border-radius: 8px;">
+                            <div class="card-title">🛠️ Engineer Agent</div>
+                            <div class="card-desc">Autonomous coding agent that reads, edits, and creates files inside your repo.</div>
+                        </td>
+                        <td class="card" style="border-radius: 8px;">
+                            <div class="card-title">📋 Project Manager</div>
+                            <div class="card-desc">High-level planning agent that coordinates tasks across repositories.</div>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td class="card" style="border-radius: 8px;">
+                            <div class="card-title">🤖 Bring Your Own LLM</div>
+                            <div class="card-desc">Azure OpenAI, Anthropic Claude, Kimi K2, and more &mdash; connect any provider.</div>
+                        </td>
+                        <td class="card" style="border-radius: 8px;">
+                            <div class="card-title">🔌 MCP &amp; Skills</div>
+                            <div class="card-desc">Extend agents with MCP tool servers and custom SKILL.md knowledge files.</div>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td class="card" style="border-radius: 8px;">
+                            <div class="card-title">📂 Multi-Repo Workspace</div>
+                            <div class="card-desc">Register multiple repositories and switch between them instantly.</div>
+                        </td>
+                        <td class="card" style="border-radius: 8px;">
+                            <div class="card-title">🔒 Fully Local</div>
+                            <div class="card-desc">No cloud relay &mdash; LLM calls go directly from your machine to the provider.</div>
+                        </td>
+                    </tr>
+                </table>
+
                 <h2>⌨️ Keyboard Shortcuts</h2>
                 <table class="shortcut-table">
-                    <tr>
-                        <td class="key">Ctrl+T</td>
-                        <td>Open new conversation tab</td>
-                    </tr>
                     <tr>
                         <td class="key">Ctrl+W</td>
                         <td>Close current tab</td>
@@ -195,18 +250,16 @@ class WelcomeTab(BaseTab):
                         <td>Open preferences</td>
                     </tr>
                     <tr>
+                        <td class="key">F12</td>
+                        <td>Toggle debug panel</td>
+                    </tr>
+                    <tr>
                         <td class="key">Ctrl+Q</td>
                         <td>Exit application</td>
                     </tr>
                 </table>
-                
-                <h2>💡 Tips</h2>
-                <ul class="feature-list">
-                    <li>✓ Use the search bar to quickly find documentation across all repositories</li>
-                    <li>✓ Right-click on repositories or LLM clients for additional options</li>
-                    <li>✓ Each tab maintains its own conversation history</li>
-                    <li>✓ Switch between different LLM models for different types of questions</li>
-                </ul>
+
+                <p class="footer">&copy; 2026 RepoPilot Contributors &middot; Version 0.0.1</p>
             </div>
         </body>
         </html>
