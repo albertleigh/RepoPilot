@@ -270,6 +270,42 @@ class TabsManager(QWidget):
             self._active_container_id = container.container_id
         return tab
 
+    def add_tab_split(self, tab: BaseTab, orientation: Qt.Orientation = Qt.Horizontal) -> BaseTab:
+        """Add *tab* in a **new** container beside the active one.
+
+        If there is only a single empty welcome container, the tab is placed
+        there instead of creating an unnecessary split.
+
+        *orientation* controls the split direction (default: side-by-side).
+        Returns the same *tab* for convenience.
+        """
+        active = self._containers.get(self._active_container_id)
+        if active is None:
+            active = self._get_first_container()
+        if active is None:
+            return self.add_tab(tab)
+
+        new_container = self._create_container()
+        new_container.add_tab(tab, tab.tab_label())
+
+        parent, idx = self._find_widget_in_tree(self.root_splitter, active)
+        if parent is None:
+            return self.add_tab(tab)
+
+        if parent.orientation() == orientation:
+            parent.insertWidget(idx + 1, new_container)
+            self._equalize(parent)
+        else:
+            sub = QSplitter(orientation)
+            parent.insertWidget(idx, sub)
+            sub.addWidget(active)
+            sub.addWidget(new_container)
+            self._equalize(sub)
+            self._equalize(parent)
+
+        self._active_container_id = new_container.container_id
+        return tab
+
     def find_tab(self, tab_type: type, predicate=None) -> BaseTab | None:
         """Find the first open tab matching *tab_type* and optional *predicate*.
 

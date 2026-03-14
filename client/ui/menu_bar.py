@@ -11,7 +11,6 @@ class AppMenuBar(QMenuBar):
     """Application menu bar with signal hooks for actions"""
     
     # File menu signals
-    add_tab_requested = Signal()
     close_tab_requested = Signal()
     exit_requested = Signal()
     
@@ -42,13 +41,6 @@ class AppMenuBar(QMenuBar):
     def _create_file_menu(self):
         """Create File menu"""
         file_menu = self.addMenu("&File")
-        
-        # Add Tab
-        add_tab_action = QAction("&Add Tab", self)
-        add_tab_action.setShortcut("Ctrl+T")
-        add_tab_action.setStatusTip("Open a new conversation tab")
-        add_tab_action.triggered.connect(self.add_tab_requested.emit)
-        file_menu.addAction(add_tab_action)
         
         # Close Tab
         close_tab_action = QAction("&Close Tab", self)

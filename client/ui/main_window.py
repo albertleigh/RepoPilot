@@ -93,7 +93,6 @@ class MainWindow(QMainWindow):
     def connect_signals(self):
         """Connect all UI signals to handlers"""
         # Menu bar signals
-        self.menu_bar.add_tab_requested.connect(self.on_add_tab)
         self.menu_bar.close_tab_requested.connect(self.on_close_tab)
         self.menu_bar.exit_requested.connect(self.close)
         self.menu_bar.find_requested.connect(self.on_find)
@@ -224,7 +223,7 @@ class MainWindow(QMainWindow):
         repo_name = self.current_repo if self.current_repo else "New Repository"
         llm_name = self.current_llm if self.current_llm else "Default LLM"
         tab = ChatTab(repo_name=repo_name, llm_name=llm_name)
-        self.chat_tabs.add_tab(tab)
+        self.chat_tabs.add_tab_split(tab)
         self.statusBar().showMessage(f"New chat tab opened for {repo_name}")
     
     def on_close_tab(self):
@@ -248,7 +247,7 @@ class MainWindow(QMainWindow):
         QMessageBox.information(
             self, 
             "Check Updates", 
-            "Current Version: 1.0.0\n\nNo updates available."
+            "Current Version: 0.0.1\n\nNo updates available."
         )
     
     def on_about(self):
@@ -502,7 +501,7 @@ class MainWindow(QMainWindow):
                 workdir=path_str,
                 llm_name=self.ctx.llm_client_registry.selected_name() or "",
             )
-            self.chat_tabs.add_tab(tab)
+            self.chat_tabs.add_tab_split(tab)
 
             # Wire signals only once, when the tab is first created
             mgr = self.ctx.engineer_manager_registry.get(Path(path_str))
@@ -572,7 +571,7 @@ class MainWindow(QMainWindow):
             event_bus=self.ctx.event_bus,
             llm_name=llm_name,
         )
-        self.chat_tabs.add_tab(tab)
+        self.chat_tabs.add_tab_split(tab)
 
         # Wire signals
         tab.message_sent.connect(pm.send_message)
