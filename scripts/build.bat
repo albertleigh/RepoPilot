@@ -2,7 +2,7 @@
 REM Build Script - Batch file for Windows
 
 echo ===================================================
-echo   Building Qt Python Application
+echo   Building RepoPilot
 echo ===================================================
 echo.
 
@@ -14,7 +14,7 @@ if exist .venv\Scripts\activate.bat (
 
 REM Run the build script
 echo Starting build process...
-python build.py
+python scripts\build.py
 
 if %ERRORLEVEL% EQU 0 (
     echo.

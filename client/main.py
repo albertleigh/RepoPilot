@@ -10,7 +10,7 @@ import importlib
 from pathlib import Path
 
 from PySide6.QtWidgets import QApplication
-from PySide6.QtGui import QKeySequence, QShortcut
+from PySide6.QtGui import QIcon, QKeySequence, QShortcut
 from core.context import AppContext
 from ui.main_window import MainWindow
 
@@ -135,6 +135,11 @@ def reload_app(state):
 def main():
     app = QApplication(sys.argv)
     app.setApplicationName("RepoPilot")
+
+    # -- Application icon --
+    icon_path = Path(__file__).resolve().parent.parent / "assets" / "repopilot.ico"
+    if icon_path.exists():
+        app.setWindowIcon(QIcon(str(icon_path)))
 
     # -- Dependency injection context --
     ctx = AppContext()

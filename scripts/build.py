@@ -1,6 +1,5 @@
-"""
-Build script for creating standalone executables
-Uses PyInstaller to package client
+"""Build script for creating standalone RepoPilot executable.
+Uses PyInstaller to package client + core into a single .exe.
 """
 import os
 import sys
@@ -30,26 +29,50 @@ def clean_build_folders():
             shutil.rmtree(folder)
     
     # Clean spec files from previous builds if regenerating
-    for spec_file in ['qt_app.spec']:
+    for spec_file in ['RepoPilot.spec']:
         if os.path.exists(spec_file):
             os.remove(spec_file)
 
 
 def build_application():
     """Build integrated application executable"""
+    icon_path = Path("assets/repopilot.ico")
+    icon_flag = f'--icon="{icon_path}" ' if icon_path.exists() else ""
     cmd = (
         "pyinstaller --onefile --windowed "
-        "--name=qt_app "
-        "--add-data=\"config.json;.\" "
-        "--paths=\".\" "
+        "--name=RepoPilot "
+        f"{icon_flag}"
+        '--add-data="assets;assets" '
+        '--paths="." '
+        '--paths="client" '
         "--hidden-import=PySide6.QtCore "
         "--hidden-import=PySide6.QtGui "
         "--hidden-import=PySide6.QtWidgets "
-        "--hidden-import=core.services "
+        "--hidden-import=core "
+        "--hidden-import=core.context "
+        "--hidden-import=core.events "
+        "--hidden-import=core.events.event_bus "
+        "--hidden-import=core.events.event_types "
+        "--hidden-import=core.engineer_manager "
+        "--hidden-import=core.project_manager "
+        "--hidden-import=core.LLMClients "
+        "--hidden-import=core.LLMClients.claude_on_azure "
+        "--hidden-import=core.LLMClients.gpt5_on_azure "
+        "--hidden-import=core.LLMClients.gpt5_codex_on_azure "
+        "--hidden-import=core.LLMClients.kimi_k2_thinking_on_azure "
+        "--hidden-import=core.mcp "
+        "--hidden-import=core.skills "
+        "--hidden-import=core.repo_registry "
+        "--hidden-import=core.git_utils "
+        "--hidden-import=anthropic "
+        "--hidden-import=openai "
+        "--hidden-import=markdown "
         "--collect-submodules=PySide6 "
+        "--collect-submodules=core "
+        "--exclude-module=PySide6.scripts "
         "client/main.py"
     )
-    run_command(cmd, "Building Application")
+    run_command(cmd, "Building RepoPilot")
 
 
 def create_release_package():
@@ -62,35 +85,28 @@ def create_release_package():
     print(f"\n📦 Creating release package...")
     
     # Copy executable
-    shutil.copy("dist/qt_app.exe", release_dir / "qt_app.exe")
-    
-    # Copy config
-    shutil.copy("config.json", release_dir / "config.json")
+    shutil.copy("dist/RepoPilot.exe", release_dir / "RepoPilot.exe")
     
     # Create README for release
-    readme_content = """# Qt Python Application - Release Package
+    readme_content = """# RepoPilot - Release Package
 
 ## Contents
-- qt_app.exe - Main GUI application (integrated)
-- config.json - Configuration file
+- RepoPilot.exe - Main application
 
 ## How to Run
 
-Simply double-click `qt_app.exe` to launch the application!
+Double-click `RepoPilot.exe` to launch the application.
 
-The application is fully integrated - no separate backend server needed.
+## First-Time Setup
+
+1. Click + in the LLM Clients panel to configure your LLM provider.
+2. Click + in the Repositories panel to add a codebase.
+3. Right-click a repo and choose Start Engineer to begin.
 
 ## Notes
-- All business logic is built into the application
-- No network communication required
-- Standalone executable with no external dependencies
-- You can edit config.json to change settings
-
-## Features
-- Check application status
-- Get sample data
-- Process and store messages
-- View response history
+- User data is stored in %APPDATA%/RepoPilot.
+- No network relay - LLM calls go directly from your machine to the provider API.
+- Standalone executable with no external dependencies.
 """
     
     with open(release_dir / "README.txt", "w") as f:
@@ -102,8 +118,8 @@ The application is fully integrated - no separate backend server needed.
 def main():
     print("""
 ╔════════════════════════════════════════════════════════════╗
-║     Qt Python Application - Build Script                  ║
-║     Building standalone executables with PyInstaller       ║
+║     RepoPilot - Build Script                              ║
+║     Building standalone executable with PyInstaller        ║
 ╚════════════════════════════════════════════════════════════╝
 """)
     
@@ -131,12 +147,10 @@ def main():
 📂 Release files are in: ./release/
 
 Contents:
-  ✓ qt_app.exe        - Integrated GUI application
-  ✓ config.json       - Configuration
+  ✓ RepoPilot.exe     - RepoPilot application
   ✓ README.txt        - User instructions
 
 To distribute: Zip the 'release' folder and share!
-Single executable - no backend server needed!
 """)
 
 

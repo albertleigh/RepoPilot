@@ -2,7 +2,7 @@
 # Quick build script for Windows users
 
 Write-Host "═══════════════════════════════════════════════════" -ForegroundColor Cyan
-Write-Host "  Building Qt Python Application" -ForegroundColor Cyan
+Write-Host "  Building RepoPilot" -ForegroundColor Cyan
 Write-Host "═══════════════════════════════════════════════════" -ForegroundColor Cyan
 Write-Host ""
 
@@ -13,8 +13,8 @@ if (Test-Path ".venv\Scripts\Activate.ps1") {
 }
 
 # Run the build script
-Write-Host "🚀 Starting build process..." -ForegroundColor Green
-python build.py
+Write-Host "Starting build process..." -ForegroundColor Green
+python scripts/build.py
 
 if ($LASTEXITCODE -eq 0) {
     Write-Host ""
