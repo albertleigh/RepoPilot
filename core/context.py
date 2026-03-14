@@ -23,9 +23,9 @@ def _default_base_dir() -> Path:
     """Return the platform-appropriate application data directory."""
     if platform.system() == "Windows":
         appdata = os.environ.get("APPDATA", "")
-        root = Path(appdata) / "ManagerCode" if appdata else Path.home() / "AppData" / "Roaming" / "ManagerCode"
+        root = Path(appdata) / "RepoPilot" if appdata else Path.home() / "AppData" / "Roaming" / "RepoPilot"
     else:
-        root = Path.home() / ".manager_code"
+        root = Path.home() / ".repo_pilot"
     return root
 
 

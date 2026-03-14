@@ -134,7 +134,7 @@ def reload_app(state):
 
 def main():
     app = QApplication(sys.argv)
-    app.setApplicationName("Repo Wiki App")
+    app.setApplicationName("RepoPilot")
 
     # -- Dependency injection context --
     ctx = AppContext()
@@ -145,7 +145,7 @@ def main():
     window = MainWindow(ctx)
 
     # Add Ctrl+R shortcut for hot reload (only in development mode)
-    if os.getenv('REPOCODE_DEV', '').lower() in ('1', 'true', 'yes'):
+    if os.getenv('REPOPILOT_DEV', '').lower() in ('1', 'true', 'yes'):
         print("🔥 Hot reload enabled - Press Ctrl+R to reload UI changes")
         state = {'window': window, 'ctx': ctx}
         _bind_reload_shortcut(state)

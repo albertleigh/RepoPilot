@@ -60,6 +60,8 @@ class MainWindow(QMainWindow):
         # Search bar at top (fixed height, no vertical stretch)
         self.search_bar = SearchBar()
         main_layout.addWidget(self.search_bar, 0)  # stretch factor 0 = fixed size
+        # temporarily hide search bar
+        self.search_bar.hide()
         
         # Horizontal splitter for left panel and right chat area
         self.main_splitter = QSplitter(Qt.Horizontal)
@@ -253,11 +255,18 @@ class MainWindow(QMainWindow):
         """Handle about action"""
         QMessageBox.about(
             self,
-            "About RepoCode",
-            "<h3>RepoCode</h3>"
-            "<p>Version 1.0.0</p>"
-            "<p>A Zeal-like repository documentation and code and chat interface.</p>"
-            "<p>Powered by Qt and Python.</p>"
+            "About RepoPilot",
+            "<div style='text-align: center;'>"
+            "<h2 style='margin-bottom: 4px;'>RepoPilot</h2>"
+            "<p style='color: #888; margin-top: 0;'>Version 0.0.1</p>"
+            "</div>"
+            "<hr>"
+            "<p>An AI-powered repository documentation and chat interface "
+            "for exploring, understanding, and working with codebases.</p>"
+            "<p style='margin-top: 12px;'>"
+            "<b>Built with:</b> Python &middot; PySide6 &middot</p>"
+            "<p style='color: #888; font-size: small; margin-top: 16px;'>"
+            "&copy; 2026 RepoPilot Contributors. All rights reserved.</p>"
         )
     
     # Search handlers
