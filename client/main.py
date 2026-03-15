@@ -9,10 +9,17 @@ import os
 import importlib
 from pathlib import Path
 
+if __package__ in (None, ""):
+    # Support IDE/script launches like `python client/main.py` by ensuring
+    # the repository root is importable as the top-level package root.
+    repo_root = Path(__file__).resolve().parent.parent
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
+
 from PySide6.QtWidgets import QApplication
 from PySide6.QtGui import QIcon, QKeySequence, QShortcut
 from core.context import AppContext
-from ui.main_window import MainWindow
+from client.ui.main_window import MainWindow
 
 LOG_FORMAT = "%(asctime)s  %(levelname)-8s  [%(name)s]  %(message)s"
 LOG_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
@@ -72,27 +79,27 @@ def reload_app(state):
     geometry = state['window'].geometry()
 
     # -- Import every UI module (for reload) --
-    from ui import event_bridge
+    from client.ui import event_bridge
 
     # left_panel_components (leaves)
-    from ui.left_panel_components import (
+    from client.ui.left_panel_components import (
         collapsible_section, repo_tree, llm_tree, mcp_tree, skill_tree,
     )
-    from ui import left_panel
+    from client.ui import left_panel
 
     # llm dialogs
-    from ui.llm import configure_llm_dialog, create_llm_dialog
+    from client.ui.llm import configure_llm_dialog, create_llm_dialog
 
     # tabs_item (leaves → composites)
-    from ui.tabs_item import base_tab, chat_tab, welcome_tab, engineer_chat_tab
+    from client.ui.tabs_item import base_tab, chat_tab, welcome_tab, engineer_chat_tab
 
     # tabs_manager (leaves → composites)
-    from ui.tabs_manager import grid_item_container
-    from ui.tabs_manager import manager as tabs_mgr_module
+    from client.ui.tabs_manager import grid_item_container
+    from client.ui.tabs_manager import manager as tabs_mgr_module
 
-    from ui import search_bar, menu_bar
-    from ui import debug_panel
-    from ui import main_window as mw_module
+    from client.ui import search_bar, menu_bar
+    from client.ui import debug_panel
+    from client.ui import main_window as mw_module
 
     # -- Reload in dependency order (leaves first) --
     importlib.reload(event_bridge)
