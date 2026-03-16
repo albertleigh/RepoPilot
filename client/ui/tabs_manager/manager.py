@@ -23,6 +23,8 @@ Each split direction toggles orientation:
 
 This allows arbitrary nesting (1×2, 2×2, 4×3, etc.) without limits.
 """
+from __future__ import annotations
+
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QSplitter, QApplication
 from PySide6.QtCore import Signal, Qt
 

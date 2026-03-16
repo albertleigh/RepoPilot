@@ -58,6 +58,8 @@ def run_git(repo_path: str | Path, *args: str) -> GitResult:
             cmd,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=30,
         )
         return GitResult(
