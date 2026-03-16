@@ -444,6 +444,8 @@ class MainWindow(QMainWindow):
 
     def on_start_engineer(self, repo_name: str):
         """Start an EngineerManager for *repo_name* and open its chat tab."""
+        from client.ui.async_runner import run_async
+
         path_str = self.ctx.repo_registry.get(repo_name)
         if not path_str:
             QMessageBox.warning(self, "Error", f"No path found for repo: {repo_name}")
@@ -463,14 +465,23 @@ class MainWindow(QMainWindow):
             )
             return
 
-        # Sync global skills into the repo before starting the agent
-        from core.skills.utils import sync_skills_to_repo
-        sync_skills_to_repo(self.ctx.base_dir / "skills", workdir)
+        self.statusBar().showMessage(f"Starting engineer for {repo_name}\u2026")
 
-        self.ctx.engineer_manager_registry.create(workdir, llm_client, auto_start=True)
-        self.left_panel.repo_tree.refresh()
-        self.on_open_engineer_chat(repo_name)
-        self.statusBar().showMessage(f"Engineer started for {repo_name}")
+        # Sync global skills into the repo in a worker thread, then
+        # create the engineer on the main thread when done.
+        def _sync_skills():
+            from core.skills.utils import sync_skills_to_repo
+            sync_skills_to_repo(self.ctx.base_dir / "skills", workdir)
+
+        def _on_synced(_result=None):
+            self.ctx.engineer_manager_registry.create(workdir, llm_client, auto_start=True)
+            self.left_panel.repo_tree.refresh()
+            self.on_open_engineer_chat(repo_name)
+            self.statusBar().showMessage(f"Engineer started for {repo_name}")
+
+        run_async(_sync_skills, on_result=_on_synced, on_error=lambda exc: (
+            self.statusBar().showMessage(f"Failed to start engineer: {exc}"),
+        ))
 
     def on_stop_engineer(self, repo_name: str):
         """Stop the EngineerManager for *repo_name*."""

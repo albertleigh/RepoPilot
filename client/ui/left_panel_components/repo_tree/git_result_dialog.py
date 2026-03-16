@@ -15,9 +15,10 @@ from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QLabel, QTextEdit, QPushButton, QHBoxLayout,
     QProgressBar,
 )
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt
 
 from core.git_utils import GitResult
+from client.ui.async_runner import run_async
 
 
 class GitCommandDialog(QDialog):
@@ -78,16 +79,27 @@ class GitCommandDialog(QDialog):
     # ------------------------------------------------------------------
 
     def run(self, fn: Callable[[], GitResult]):
-        """Show the dialog, execute *fn* after the event loop paints, then display the result."""
-        self._fn = fn
+        """Show the dialog and execute *fn* in a background thread.
+
+        The UI stays responsive while the command runs.  Results are
+        delivered back to the main thread via signals.
+        """
         self.show()
-        # Give the event loop enough time to paint the loading state before blocking
-        QTimer.singleShot(50, self._execute)
+        run_async(
+            fn,
+            on_result=self._populate_result,
+            on_error=self._on_worker_error,
+        )
         self.exec()
 
-    def _execute(self):
-        result = self._fn()
-        self._populate_result(result)
+    def _on_worker_error(self, exc: Exception):
+        """Handle unexpected errors from the worker thread."""
+        self._populate_result(GitResult(
+            success=False,
+            command="(internal)",
+            stdout="",
+            stderr=str(exc),
+        ))
 
     def _populate_result(self, result: GitResult):
         if result.success:

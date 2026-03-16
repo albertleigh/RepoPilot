@@ -4,6 +4,9 @@ Git-aware tree view for managing repositories, branches, and commits.
 Backed by :class:`RepoRegistry` for persistence and
 :class:`EngineerManagerRegistry` for agent lifecycle.
 """
+from __future__ import annotations
+
+import logging
 from pathlib import Path
 
 from PySide6.QtWidgets import (
@@ -16,11 +19,14 @@ from PySide6.QtGui import QAction
 from core.repo_registry import RepoRegistry
 from core.engineer_manager.registry import EngineerManagerRegistry
 from core import git_utils
+from client.ui.async_runner import run_async
 
 from .branch_item import BranchItem, ROLE_BRANCH, ROLE_REPO, ROLE_ACTIVE
 from .commit_item import CommitItem, ROLE_COMMIT_HASH
 from .commit_item import ROLE_REPO as COMMIT_ROLE_REPO
 from .git_result_dialog import GitCommandDialog
+
+_log = logging.getLogger(__name__)
 
 
 class RepoTree(QWidget):
@@ -91,31 +97,78 @@ class RepoTree(QWidget):
     # ------------------------------------------------------------------
 
     def refresh(self):
-        """Rebuild the tree from registries + git state."""
-        self.tree.clear()
+        """Rebuild the tree from registries + git state (non-blocking).
+
+        Heavy git subprocess calls are offloaded to a worker thread so
+        the UI stays responsive.  While the worker is running a second
+        call to ``refresh()`` is a no-op (debounced).
+        """
+        if getattr(self, "_refresh_pending", False):
+            return
+        self._refresh_pending = True
+
+        # Snapshot the repo list + running state (fast, main-thread-safe)
+        repos: list[tuple[str, str, bool]] = []
         for name, path_str in self._repo_reg.all_repos().items():
             mgr = self._eng_reg.get(Path(path_str))
             running = mgr is not None and mgr.is_running
-            self._add_repo_item(name, path_str, running)
+            repos.append((name, path_str, running))
 
-    def _add_repo_item(self, name: str, path_str: str, running: bool):
-        """Add a single repository with its branches and commits."""
+        def _fetch():
+            """Run in worker thread — collect git data."""
+            result = []
+            for name, path_str, running in repos:
+                branches = git_utils.get_branches(path_str)
+                branch_data = []
+                for branch in branches:
+                    commits = git_utils.get_recent_commits(
+                        path_str, branch.name, count=5,
+                    )
+                    branch_data.append((branch, commits))
+                result.append((name, path_str, running, branch_data))
+            return result
+
+        def _apply(data):
+            """Run on main thread — rebuild the tree widget."""
+            self.tree.clear()
+            for name, path_str, running, branch_data in data:
+                self._add_repo_item(name, path_str, running, branch_data)
+            self._refresh_pending = False
+
+        def _on_error(exc):
+            _log.warning("Repo tree refresh failed: %s", exc)
+            self._refresh_pending = False
+
+        run_async(_fetch, on_result=_apply, on_error=_on_error)
+
+    def _add_repo_item(self, name: str, path_str: str, running: bool,
+                       branch_data: list | None = None):
+        """Add a single repository with its branches and commits.
+
+        When *branch_data* is ``None`` (legacy call), branches/commits
+        are fetched synchronously — prefer passing pre-fetched data.
+        """
         item = QTreeWidgetItem(self.tree)
         icon = "\u25B6\uFE0F" if running else "\u23F9\uFE0F"
         item.setText(0, f"{icon} {name} ({path_str})")
         item.setData(0, Qt.UserRole, name)
 
-        # Branches + commits
-        branches = git_utils.get_branches(path_str)
-        if not branches:
+        if branch_data is None:
+            # Fallback: fetch synchronously (only used if called directly)
+            branches = git_utils.get_branches(path_str)
+            branch_data = [
+                (branch, git_utils.get_recent_commits(path_str, branch.name, count=5))
+                for branch in branches
+            ]
+
+        if not branch_data:
             placeholder = QTreeWidgetItem(item)
             placeholder.setText(0, "No branches found")
-            placeholder.setFlags(Qt.NoItemFlags)  # non-interactive
+            placeholder.setFlags(Qt.NoItemFlags)
             return
 
-        for branch in branches:
+        for branch, commits in branch_data:
             branch_node = BranchItem(item, branch, name)
-            commits = git_utils.get_recent_commits(path_str, branch.name, count=5)
             for commit in commits:
                 CommitItem(branch_node, commit, name, branch.name)
 
