@@ -7,6 +7,7 @@ Backed by :class:`RepoRegistry` for persistence and
 from __future__ import annotations
 
 import logging
+from enum import Enum, auto
 from pathlib import Path
 
 from PySide6.QtWidgets import (
@@ -27,6 +28,14 @@ from .commit_item import ROLE_REPO as COMMIT_ROLE_REPO
 from .git_result_dialog import GitCommandDialog
 
 _log = logging.getLogger(__name__)
+
+
+class _RefreshState(Enum):
+    """Lifecycle states for the async refresh cycle."""
+    IDLE = auto()              # no worker in flight, ready for refresh
+    FETCHING = auto()          # worker is fetching git data
+    FETCHING_DIRTY = auto()    # worker in flight + another refresh was requested
+    DESTROYED = auto()         # widget destroyed, ignore all callbacks
 
 
 class RepoTree(QWidget):
@@ -51,6 +60,8 @@ class RepoTree(QWidget):
         super().__init__(parent)
         self._repo_reg = repo_registry
         self._eng_reg = engineer_registry
+        self._state = _RefreshState.IDLE
+        self.destroyed.connect(self._on_destroyed)
         self.setup_ui()
         self.refresh()
 
@@ -99,13 +110,16 @@ class RepoTree(QWidget):
     def refresh(self):
         """Rebuild the tree from registries + git state (non-blocking).
 
-        Heavy git subprocess calls are offloaded to a worker thread so
-        the UI stays responsive.  While the worker is running a second
-        call to ``refresh()`` is a no-op (debounced).
+        First renders every repo immediately from the registry (no I/O)
+        so the tree appears instantly, then fetches git branch/commit
+        data in a background thread and updates each repo node.
         """
-        if getattr(self, "_refresh_pending", False):
+        if self._state is _RefreshState.DESTROYED:
             return
-        self._refresh_pending = True
+        if self._state in (_RefreshState.FETCHING, _RefreshState.FETCHING_DIRTY):
+            self._state = _RefreshState.FETCHING_DIRTY
+            return
+        self._state = _RefreshState.FETCHING
 
         # Snapshot the repo list + running state (fast, main-thread-safe)
         repos: list[tuple[str, str, bool]] = []
@@ -114,10 +128,21 @@ class RepoTree(QWidget):
             running = mgr is not None and mgr.is_running
             repos.append((name, path_str, running))
 
+        # Phase 1: render skeleton immediately (no git I/O)
+        self.tree.clear()
+        for name, path_str, running in repos:
+            item = QTreeWidgetItem(self.tree)
+            icon = "\u25B6\uFE0F" if running else "\u23F9\uFE0F"
+            item.setText(0, f"{icon} {name} ({path_str})")
+            item.setData(0, Qt.UserRole, name)
+            loading = QTreeWidgetItem(item)
+            loading.setText(0, "\u23f3 Loading branches\u2026")
+            loading.setFlags(Qt.NoItemFlags)
+
+        # Phase 2: fetch git data in a worker thread
         def _fetch():
-            """Run in worker thread — collect git data."""
             result = []
-            for name, path_str, running in repos:
+            for name, path_str, _running in repos:
                 branches = git_utils.get_branches(path_str)
                 branch_data = []
                 for branch in branches:
@@ -125,21 +150,31 @@ class RepoTree(QWidget):
                         path_str, branch.name, count=5,
                     )
                     branch_data.append((branch, commits))
-                result.append((name, path_str, running, branch_data))
+                result.append((name, path_str, branch_data))
             return result
 
+        def _on_done():
+            if self._state is _RefreshState.DESTROYED:
+                return
+            was_dirty = self._state is _RefreshState.FETCHING_DIRTY
+            self._state = _RefreshState.IDLE
+            if was_dirty:
+                self.refresh()
+
         def _apply(data):
-            """Run on main thread — rebuild the tree widget."""
+            if self._state is _RefreshState.DESTROYED:
+                return
             self.tree.clear()
-            for name, path_str, running, branch_data in data:
+            for name, path_str, branch_data in data:
+                mgr = self._eng_reg.get(Path(path_str))
+                running = mgr is not None and mgr.is_running
                 self._add_repo_item(name, path_str, running, branch_data)
-            self._refresh_pending = False
 
         def _on_error(exc):
             _log.warning("Repo tree refresh failed: %s", exc)
-            self._refresh_pending = False
 
-        run_async(_fetch, on_result=_apply, on_error=_on_error)
+        run_async(_fetch, on_result=_apply, on_error=_on_error,
+                  on_finished=_on_done)
 
     def _add_repo_item(self, name: str, path_str: str, running: bool,
                        branch_data: list | None = None):
@@ -365,6 +400,10 @@ class RepoTree(QWidget):
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    def _on_destroyed(self):
+        """Guard so in-flight workers don't touch a dead widget."""
+        self._state = _RefreshState.DESTROYED
 
     def _open_in_code(self, path: str):
         """Launch VS Code for the given folder."""

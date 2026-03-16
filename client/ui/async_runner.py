@@ -26,6 +26,11 @@ from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal, Slot
 
 _log = logging.getLogger(__name__)
 
+# Set of workers that are currently in-flight.  Prevents Python from
+# garbage-collecting the worker (and its _WorkerSignals QObject) before
+# the queued Qt signals have been delivered to the main thread.
+_active_workers: set["_Worker"] = set()
+
 
 # ------------------------------------------------------------------
 # Internal signal carrier
@@ -111,6 +116,10 @@ def run_async(
         worker.signals.error.connect(on_error)
     if on_finished is not None:
         worker.signals.finished.connect(on_finished)
+
+    # prevent GC until the worker finishes and signals are delivered
+    _active_workers.add(worker)
+    worker.signals.finished.connect(lambda: _active_workers.discard(worker))
 
     (pool or QThreadPool.globalInstance()).start(worker)
     return worker
