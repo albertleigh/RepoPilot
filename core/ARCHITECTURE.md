@@ -92,10 +92,11 @@ All LLM adapters live in `core/LLMClients/` and implement the
 `LLMClient` abstract base class.  Two families of OpenAI-compatible
 APIs exist on Azure; choose the right one for your model:
 
-| API Style            | SDK client          | Models                    | Reference implementation        |
-|----------------------|---------------------|---------------------------|---------------------------------|
-| Chat Completions     | `openai.AzureOpenAI`| GPT-5, GPT-5-Codex, Kimi | `gpt5_on_azure.py`              |
-| Responses API        | `openai.OpenAI`     | GPT-5.4-Pro               | `gpt54_pro_on_azure.py`         |
+| API Style                    | SDK client            | Models                    | Reference implementation        |
+|------------------------------|-----------------------|---------------------------|---------------------------------|
+| Chat Completions             | `openai.AzureOpenAI`  | GPT-5, Kimi               | `gpt5_on_azure.py`              |
+| Responses (`OpenAI`)         | `openai.OpenAI`       | GPT-5.4-Pro, GPT-5-Codex  | `gpt54_pro_on_azure.py`         |
+| Responses (`AzureOpenAI`)    | `openai.AzureOpenAI`  | GPT-5.3-Codex             | `gpt53_codex_on_azure.py`       |
 
 The **Responses API** uses a different wire format.  Adapters that need
 it must translate the agent loop's Chat-Completions-shaped `messages`

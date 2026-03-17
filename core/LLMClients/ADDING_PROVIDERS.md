@@ -120,10 +120,20 @@ Return values:
 
 #### Chat Completions vs Responses API
 
-Some Azure models (e.g. GPT-5, GPT-5-Codex) work with the **Chat
-Completions API** (`client.chat.completions.create` via `openai.AzureOpenAI`).
-Other models (e.g. GPT-5.4-Pro) only support the newer **Responses API**
-(`client.responses.create` via `openai.OpenAI` with a `base_url`).
+Some Azure models (e.g. GPT-5) work with the **Chat Completions API**
+(`client.chat.completions.create` via `openai.AzureOpenAI`).
+Other models only support the newer **Responses API**
+(`client.responses.create`).  Two variants exist:
+
+| Variant                         | SDK client            | Example models           | Reference implementation       |
+|---------------------------------|-----------------------|--------------------------|--------------------------------|
+| Responses via `OpenAI`          | `openai.OpenAI`       | GPT-5.4-Pro, GPT-5-Codex | `gpt54_pro_on_azure.py`        |
+| Responses via `AzureOpenAI`     | `openai.AzureOpenAI`  | GPT-5.3-Codex            | `gpt53_codex_on_azure.py`      |
+
+Use `openai.OpenAI` with `base_url="{endpoint}/openai/v1/"` when the
+model's endpoint follows that path.  Use `openai.AzureOpenAI` with an
+`api_version` when the endpoint requires
+`/openai/responses?api-version=...`.
 
 The agent loop always builds a `messages` list in Chat-Completions
 format.  If your model requires the Responses API you must:
