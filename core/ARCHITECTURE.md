@@ -86,6 +86,24 @@ ctx.setup_my_service()
 | Keep service classes free of Qt dependencies | Import `PySide6` inside `core/`               |
 | Add new services to `AppContext.__init__`    | Scatter singletons across packages            |
 
+## LLM provider adapters
+
+All LLM adapters live in `core/LLMClients/` and implement the
+`LLMClient` abstract base class.  Two families of OpenAI-compatible
+APIs exist on Azure; choose the right one for your model:
+
+| API Style            | SDK client          | Models                    | Reference implementation        |
+|----------------------|---------------------|---------------------------|---------------------------------|
+| Chat Completions     | `openai.AzureOpenAI`| GPT-5, GPT-5-Codex, Kimi | `gpt5_on_azure.py`              |
+| Responses API        | `openai.OpenAI`     | GPT-5.4-Pro               | `gpt54_pro_on_azure.py`         |
+
+The **Responses API** uses a different wire format.  Adapters that need
+it must translate the agent loop's Chat-Completions-shaped `messages`
+list into Responses input items and back.  See
+`GPT54ProOnAzureClient._msgs_to_input()` for the canonical translator.
+
+Full guide: `core/LLMClients/ADDING_PROVIDERS.md`.
+
 ## Current services
 
 | Attribute                    | Type                       | Purpose                                      |
