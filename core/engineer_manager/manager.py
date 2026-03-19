@@ -72,7 +72,7 @@ from .tool_definitions import TOOLS
 
 _log = logging.getLogger(__name__)
 
-MAX_TOOL_ROUNDS = 200  # hard cap to prevent infinite tool-loop spirals
+MAX_TOOL_ROUNDS = 500  # hard cap to prevent infinite tool-loop spirals
 
 
 class Status(Enum):

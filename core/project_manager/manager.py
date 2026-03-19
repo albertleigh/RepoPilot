@@ -79,7 +79,7 @@ from .events import (
 
 _log = logging.getLogger(__name__)
 
-MAX_TOOL_ROUNDS = 60  # higher cap than engineer — coordination takes more turns
+MAX_TOOL_ROUNDS = 500  # coordination + wait rounds burn through quickly
 
 
 class PMStatus(Enum):
