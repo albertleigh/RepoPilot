@@ -153,8 +153,8 @@ class MessageBubble(QFrame):
         if self.role == MessageRole.USER:
             bg = pal.highlight().color()
             if bg.lightness() > 128:
-                return "#00000018", _rgb(pal.highlightedText().color())
-            return "#ffffff15", _rgb(pal.highlightedText().color())
+                return _rgb(bg.darker(115)), "#1e1e2e"
+            return _rgb(bg.lighter(130)), "#e8e8ee"
         base = pal.window().color()
         if base.lightness() > 128:
             return "#e8e8ee", "#1e1e2e"

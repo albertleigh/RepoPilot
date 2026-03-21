@@ -1,15 +1,15 @@
 """
-GPT-5-Codex on Azure OpenAI LLM client implementation.
+GPT-5.3-Codex on Azure OpenAI LLM client implementation.
 
-Uses the OpenAI **Responses API** (``client.responses.create``) because
-Azure's Chat Completions endpoint does not support this model.  The
-``openai.OpenAI`` client is pointed at the ``/openai/v1/`` path of an
-Azure Cognitive Services endpoint.
+Uses the ``openai`` SDK's ``AzureOpenAI`` client with the **Responses API**
+(``client.responses.create``).  The Azure endpoint is called with the
+standard ``api-version`` query parameter, e.g.::
 
-Internally the agent loop speaks the Chat-Completions message format
-(``{"role": "assistant", …}``).  This adapter translates back and forth
-so the rest of the application doesn't need to know about the Responses
-API wire format.
+    POST {azure_endpoint}/openai/responses?api-version=2025-04-01-preview
+
+Internally the agent loop speaks the Chat-Completions message format.
+This adapter translates back and forth so the rest of the application
+doesn't need to know about the Responses API wire format.
 """
 from __future__ import annotations
 
@@ -23,11 +23,12 @@ from .base import LLMClient, LLMResponse, ToolCall
 _log = logging.getLogger(__name__)
 
 
-class GPT5CodexOnAzureClient(LLMClient):
-    """Adapter for GPT-5-Codex on Azure via the Responses API."""
+class GPT53CodexOnAzureClient(LLMClient):
+    """Adapter for GPT-5.3-Codex on Azure via AzureOpenAI + Responses API."""
 
-    PROVIDER = "GPT-5-Codex on Azure"
-    DEFAULT_MODEL = "gpt-5-codex"
+    PROVIDER = "GPT-5.3-Codex on Azure"
+    DEFAULT_MODEL = "gpt-5.3-codex"
+    DEFAULT_API_VERSION = "2025-04-01-preview"
     MAX_TOKENS = 16384
     MAX_TOOLS = 128
 
@@ -35,8 +36,8 @@ class GPT5CodexOnAzureClient(LLMClient):
         {
             "key": "model_id",
             "label": "Deployment Name",
-            "placeholder": "gpt-5-codex",
-            "default": "gpt-5-codex",
+            "placeholder": "gpt-5.3-codex",
+            "default": "gpt-5.3-codex",
             "required": True,
             "secret": False,
         },
@@ -56,18 +57,28 @@ class GPT5CodexOnAzureClient(LLMClient):
             "required": True,
             "secret": False,
         },
+        {
+            "key": "api_version",
+            "label": "API Version",
+            "placeholder": "2025-04-01-preview",
+            "default": "2025-04-01-preview",
+            "required": True,
+            "secret": False,
+        },
     ]
 
     def __init__(self, api_key: str, azure_endpoint: str,
-                 model_id: str = DEFAULT_MODEL):
+                 model_id: str = DEFAULT_MODEL,
+                 api_version: str = DEFAULT_API_VERSION):
         self._api_key = api_key
         self._azure_endpoint = azure_endpoint.rstrip("/")
         self._model_id = model_id
+        self._api_version = api_version
 
-        base_url = f"{self._azure_endpoint}/openai/v1/"
-        self._client = openai.OpenAI(
-            base_url=base_url,
+        self._client = openai.AzureOpenAI(
             api_key=self._api_key,
+            azure_endpoint=self._azure_endpoint,
+            api_version=self._api_version,
         )
 
     # -- LLMClient interface --
@@ -95,10 +106,10 @@ class GPT5CodexOnAzureClient(LLMClient):
         return response.output_text or ""
 
     def is_available(self) -> bool:
-        base_url = self._client.base_url
         _log.info(
-            "Testing GPT-5-Codex connection (base_url=%s, deployment=%s)",
-            base_url, self._model_id,
+            "Testing GPT-5.3-Codex connection "
+            "(endpoint=%s, deployment=%s, api_version=%s)",
+            self._azure_endpoint, self._model_id, self._api_version,
         )
         try:
             self._client.responses.create(
@@ -109,10 +120,11 @@ class GPT5CodexOnAzureClient(LLMClient):
             return True
         except Exception:
             _log.exception(
-                "GPT-5-Codex connection test failed "
-                "(base_url=%s, deployment=%s)",
-                base_url,
+                "GPT-5.3-Codex connection test failed "
+                "(endpoint=%s, deployment=%s, api_version=%s)",
+                self._azure_endpoint,
                 self._model_id,
+                self._api_version,
             )
             return False
 

@@ -1,5 +1,5 @@
 """
-GPT-5-Codex on Azure OpenAI LLM client implementation.
+GPT-5.4-Pro on Azure OpenAI LLM client implementation.
 
 Uses the OpenAI **Responses API** (``client.responses.create``) because
 Azure's Chat Completions endpoint does not support this model.  The
@@ -23,11 +23,11 @@ from .base import LLMClient, LLMResponse, ToolCall
 _log = logging.getLogger(__name__)
 
 
-class GPT5CodexOnAzureClient(LLMClient):
-    """Adapter for GPT-5-Codex on Azure via the Responses API."""
+class GPT54ProOnAzureClient(LLMClient):
+    """Adapter for GPT-5.4-Pro on Azure via the Responses API."""
 
-    PROVIDER = "GPT-5-Codex on Azure"
-    DEFAULT_MODEL = "gpt-5-codex"
+    PROVIDER = "GPT-5.4-Pro on Azure"
+    DEFAULT_MODEL = "gpt-5.4-pro"
     MAX_TOKENS = 16384
     MAX_TOOLS = 128
 
@@ -35,8 +35,8 @@ class GPT5CodexOnAzureClient(LLMClient):
         {
             "key": "model_id",
             "label": "Deployment Name",
-            "placeholder": "gpt-5-codex",
-            "default": "gpt-5-codex",
+            "placeholder": "gpt-5.4-pro",
+            "default": "gpt-5.4-pro",
             "required": True,
             "secret": False,
         },
@@ -97,7 +97,7 @@ class GPT5CodexOnAzureClient(LLMClient):
     def is_available(self) -> bool:
         base_url = self._client.base_url
         _log.info(
-            "Testing GPT-5-Codex connection (base_url=%s, deployment=%s)",
+            "Testing GPT-5.4-Pro connection (base_url=%s, deployment=%s)",
             base_url, self._model_id,
         )
         try:
@@ -109,7 +109,7 @@ class GPT5CodexOnAzureClient(LLMClient):
             return True
         except Exception:
             _log.exception(
-                "GPT-5-Codex connection test failed "
+                "GPT-5.4-Pro connection test failed "
                 "(base_url=%s, deployment=%s)",
                 base_url,
                 self._model_id,
@@ -137,6 +137,16 @@ class GPT5CodexOnAzureClient(LLMClient):
     # ------------------------------------------------------------------
     # Conversation format translation
     # ------------------------------------------------------------------
+    # The agent loop builds a *messages* list in Chat-Completions shape:
+    #   {"role": "system"|"user"|"assistant", "content": ...}
+    #   {"role": "assistant", "tool_calls": [...]}      ← from assistant_message
+    #   {"role": "tool", "tool_call_id": ..., "content": ...}  ← from make_tool_results
+    #
+    # The Responses API expects *input* items that look like:
+    #   {"role": "system"|"user"|"developer", "content": ...}
+    #   {"type": "function_call", "name": ..., "arguments": ..., "call_id": ...}
+    #   {"type": "function_call_output", "call_id": ..., "output": ...}
+    # ------------------------------------------------------------------
 
     @staticmethod
     def _msgs_to_input(messages: list[dict]) -> list[dict]:
@@ -156,11 +166,13 @@ class GPT5CodexOnAzureClient(LLMClient):
                     "content": msg["content"],
                 })
             elif role == "assistant":
+                # May have text content
                 if msg.get("content"):
                     items.append({
                         "role": "assistant",
                         "content": msg["content"],
                     })
+                # May have tool calls
                 for tc in msg.get("tool_calls", []):
                     fn = tc.get("function", {})
                     items.append({
@@ -228,6 +240,8 @@ class GPT5CodexOnAzureClient(LLMClient):
         text = "\n".join(text_parts)
         has_tool_calls = len(tool_calls) > 0
 
+        # Build an assistant_message in Chat-Completions format so the
+        # agent loop can append it to its messages list as usual.
         assistant_msg: dict = {
             "role": "assistant",
             "content": text or None,
@@ -243,6 +257,11 @@ class GPT5CodexOnAzureClient(LLMClient):
         )
 
     def make_tool_results(self, results: list[dict]) -> list[dict]:
+        """Return Chat-Completions-shaped tool result messages.
+
+        ``_msgs_to_input`` will translate these to ``function_call_output``
+        items before the next API call.
+        """
         return [
             {
                 "role": "tool",

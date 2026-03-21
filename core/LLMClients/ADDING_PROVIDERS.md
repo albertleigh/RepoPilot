@@ -118,6 +118,49 @@ Return values:
 | `stop_reason`       | `str`             | `"tool_use"` if the model wants tools executed, otherwise `"end_turn"` |
 | `assistant_message` | `dict`            | Provider-native message dict to append to history as-is |
 
+#### Chat Completions vs Responses API
+
+Some Azure models (e.g. GPT-5) work with the **Chat Completions API**
+(`client.chat.completions.create` via `openai.AzureOpenAI`).
+Other models only support the newer **Responses API**
+(`client.responses.create`).  Two variants exist:
+
+| Variant                         | SDK client            | Example models           | Reference implementation       |
+|---------------------------------|-----------------------|--------------------------|--------------------------------|
+| Responses via `OpenAI`          | `openai.OpenAI`       | GPT-5.4-Pro, GPT-5-Codex | `gpt54_pro_on_azure.py`        |
+| Responses via `AzureOpenAI`     | `openai.AzureOpenAI`  | GPT-5.3-Codex            | `gpt53_codex_on_azure.py`      |
+
+Use `openai.OpenAI` with `base_url="{endpoint}/openai/v1/"` when the
+model's endpoint follows that path.  Use `openai.AzureOpenAI` with an
+`api_version` when the endpoint requires
+`/openai/responses?api-version=...`.
+
+The agent loop always builds a `messages` list in Chat-Completions
+format.  If your model requires the Responses API you must:
+
+1. **Use `openai.OpenAI`** with `base_url="{azure_endpoint}/openai/v1/"`
+   instead of `openai.AzureOpenAI`.
+2. **Translate messages → Responses API input** before each call.
+   The mapping is:
+
+   | Chat Completions message              | Responses API input item                  |
+   |---------------------------------------|-------------------------------------------|
+   | `{"role": "system", …}`               | `{"role": "developer", …}`                |
+   | `{"role": "user", …}`                 | `{"role": "user", …}`                     |
+   | `{"role": "assistant", "content": …}`  | `{"role": "assistant", "content": …}`      |
+   | `{"role": "assistant", "tool_calls": [{"id", "function": {"name", "arguments"}}]}` | `{"type": "function_call", "call_id", "name", "arguments"}` (one per call) |
+   | `{"role": "tool", "tool_call_id", "content"}` | `{"type": "function_call_output", "call_id", "output"}` |
+
+3. **Translate Responses API output → `LLMResponse`** with an
+   `assistant_message` in Chat-Completions format so the agent loop
+   can append it to its messages list as usual.
+4. **Translate tool definitions** to the flat Responses format:
+   `{"type": "function", "name": …, "parameters": …}` (not nested
+   under a `"function"` key).
+
+See `GPT54ProOnAzureClient` in `gpt54_pro_on_azure.py` for a complete
+working example with the `_msgs_to_input()` translator.
+
 ### 2. Register it in `AppContext`
 
 In `core/context.py`, import your class in `register_default_providers()`

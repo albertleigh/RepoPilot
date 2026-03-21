@@ -72,7 +72,7 @@ from .tool_definitions import TOOLS
 
 _log = logging.getLogger(__name__)
 
-MAX_TOOL_ROUNDS = 200  # hard cap to prevent infinite tool-loop spirals
+MAX_TOOL_ROUNDS = 500  # hard cap to prevent infinite tool-loop spirals
 
 
 class Status(Enum):
@@ -204,7 +204,7 @@ class EngineerManager:
             "edit_file":  lambda **kw: run_edit(self.workdir, kw["path"], kw["old_text"], kw["new_text"]),
         }
         sub_msgs: list[dict] = [{"role": "user", "content": prompt}]
-        for _ in range(30):
+        for _ in range(1000):
             response = self._llm.send_with_tools(sub_msgs, sub_tools)
             sub_msgs.append(response.assistant_message)
             if response.stop_reason != "tool_use":

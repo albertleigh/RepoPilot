@@ -216,6 +216,20 @@ class MainWindow(QMainWindow):
             self._debug_window.deleteLater()
             self._debug_window = None
 
+    # ------------------------------------------------------------------
+    # Tab helpers
+    # ------------------------------------------------------------------
+
+    def _open_tab(self, tab):
+        """Add *tab* intelligently: replace a lone WelcomeTab, otherwise split."""
+        from .tabs_item import WelcomeTab
+
+        all_tabs = self.chat_tabs.get_all_tabs()
+        if len(all_tabs) == 1 and isinstance(all_tabs[0], WelcomeTab):
+            self.chat_tabs.add_tab(tab)
+        else:
+            self.chat_tabs.add_tab_split(tab)
+
     # Menu handlers
     def on_add_tab(self):
         """Add a new chat tab"""
@@ -223,13 +237,13 @@ class MainWindow(QMainWindow):
         repo_name = self.current_repo if self.current_repo else "New Repository"
         llm_name = self.current_llm if self.current_llm else "Default LLM"
         tab = ChatTab(repo_name=repo_name, llm_name=llm_name)
-        self.chat_tabs.add_tab_split(tab)
+        self._open_tab(tab)
         self.statusBar().showMessage(f"New chat tab opened for {repo_name}")
-    
+
     def on_close_tab(self):
         """Close current tab"""
         self.chat_tabs.close_current_tab()
-    
+
     def on_find(self):
         """Handle find action"""
         QMessageBox.information(self, "Find", "Find functionality - To be implemented")
@@ -499,11 +513,27 @@ class MainWindow(QMainWindow):
         if not path_str:
             return
 
+        workdir = Path(path_str)
+
         # Re-use an existing tab or create a new one
         tab = self.chat_tabs.find_tab(
             EngineerChatTab, lambda t: t.repo_name == repo_name,
         )
         if tab is not None:
+            # Reconnect signals to the current manager instance
+            # (the old manager may have been removed and a new one created)
+            mgr = self.ctx.engineer_manager_registry.get(workdir)
+            if mgr is not None:
+                try:
+                    tab.message_sent.disconnect()
+                except RuntimeError:
+                    pass
+                try:
+                    tab.stop_requested.disconnect()
+                except RuntimeError:
+                    pass
+                tab.message_sent.connect(mgr.send_message)
+                tab.stop_requested.connect(mgr.cancel)
             self.chat_tabs.focus_tab(tab)
         else:
             tab = EngineerChatTab(
@@ -512,10 +542,10 @@ class MainWindow(QMainWindow):
                 workdir=path_str,
                 llm_name=self.ctx.llm_client_registry.selected_name() or "",
             )
-            self.chat_tabs.add_tab_split(tab)
+            self._open_tab(tab)
 
             # Wire signals only once, when the tab is first created
-            mgr = self.ctx.engineer_manager_registry.get(Path(path_str))
+            mgr = self.ctx.engineer_manager_registry.get(workdir)
             if mgr is not None:
                 tab.message_sent.connect(mgr.send_message)
                 tab.stop_requested.connect(mgr.cancel)
@@ -582,7 +612,7 @@ class MainWindow(QMainWindow):
             event_bus=self.ctx.event_bus,
             llm_name=llm_name,
         )
-        self.chat_tabs.add_tab_split(tab)
+        self._open_tab(tab)
 
         # Wire signals
         tab.message_sent.connect(pm.send_message)
