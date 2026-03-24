@@ -62,11 +62,12 @@ class LLMClient(ABC):
     RETRY_WAIT_SECONDS: int = 60
 
     def _call_with_retry(self, func, *args, **kwargs):
-        """Call *func* with automatic retry on rate-limit (HTTP 429) errors.
+        """Call *func* with automatic retry on transient errors.
 
-        Retries up to ``RETRY_MAX_ATTEMPTS`` times, waiting
-        ``RETRY_WAIT_SECONDS`` between each attempt.  Raises the
-        original exception if all attempts are exhausted.
+        Retries on HTTP 429 (rate-limit) and 529 (overloaded) up to
+        ``RETRY_MAX_ATTEMPTS`` times, waiting ``RETRY_WAIT_SECONDS``
+        between each attempt.  Raises the original exception if all
+        attempts are exhausted.
         """
         last_exc: Exception | None = None
         for attempt in range(1, self.RETRY_MAX_ATTEMPTS + 1):
@@ -74,10 +75,11 @@ class LLMClient(ABC):
                 return func(*args, **kwargs)
             except Exception as exc:
                 status = getattr(exc, "status_code", None)
-                if status == 429 and attempt < self.RETRY_MAX_ATTEMPTS:
+                if status in (429, 529) and attempt < self.RETRY_MAX_ATTEMPTS:
                     _log.warning(
-                        "Rate limit hit (attempt %d/%d). "
+                        "Transient API error %s (attempt %d/%d). "
                         "Retrying in %ds…",
+                        status,
                         attempt,
                         self.RETRY_MAX_ATTEMPTS,
                         self.RETRY_WAIT_SECONDS,
