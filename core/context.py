@@ -71,6 +71,7 @@ class AppContext:
             repo_registry=self.repo_registry,
             event_bus=self.event_bus,
             mcp_server_registry=self.mcp_server_registry,
+            base_dir=self.base_dir,
         )
 
     # ------------------------------------------------------------------

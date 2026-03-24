@@ -111,12 +111,14 @@ class ProjectManager:
         repo_registry: RepoRegistry,
         event_bus: EventBus | None = None,
         mcp_server_registry: McpServerRegistry | None = None,
+        base_dir: Path | None = None,
     ) -> None:
         self._llm = llm_client
         self._eng_reg = engineer_registry
         self._repo_reg = repo_registry
         self._event_bus = event_bus
         self._mcp = mcp_server_registry
+        self._base_dir = base_dir or Path(".")
         self.status: PMStatus = PMStatus.IDLE
 
         # -- sub-services --
@@ -805,7 +807,7 @@ class ProjectManager:
                     phase="compressing",
                     detail="Compacting conversation history\u2026",
                 ))
-                msgs[:] = auto_compact(msgs, self._llm, Path("."))
+                msgs[:] = auto_compact(msgs, self._llm, self._base_dir)
 
             # -- drain background notifications --
             bg_notifs: list[str] = []
@@ -916,7 +918,7 @@ class ProjectManager:
             msgs.extend(self._llm.make_tool_results(results))
 
             if manual_compress:
-                msgs[:] = auto_compact(msgs, self._llm, Path("."))
+                msgs[:] = auto_compact(msgs, self._llm, self._base_dir)
 
         if self._cancel.is_set():
             msgs.append({"role": "assistant", "content": "[Cancelled by user]"})

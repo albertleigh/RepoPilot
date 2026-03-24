@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import logging
 
+from pathlib import Path
+
 from core.LLMClients.base import LLMClient
 from core.events import EventBus
 from core.engineer_manager.registry import EngineerManagerRegistry
@@ -28,11 +30,13 @@ class ProjectManagerRegistry:
         repo_registry: RepoRegistry,
         event_bus: EventBus | None = None,
         mcp_server_registry: McpServerRegistry | None = None,
+        base_dir: Path | None = None,
     ) -> None:
         self._eng_reg = engineer_registry
         self._repo_reg = repo_registry
         self._event_bus = event_bus
         self._mcp_server_registry = mcp_server_registry
+        self._base_dir = base_dir
         self._instance: ProjectManager | None = None
 
     def create(
@@ -56,6 +60,7 @@ class ProjectManagerRegistry:
             repo_registry=self._repo_reg,
             event_bus=self._event_bus,
             mcp_server_registry=self._mcp_server_registry,
+            base_dir=self._base_dir,
         )
         if auto_start:
             self._instance.start()
