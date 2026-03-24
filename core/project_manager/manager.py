@@ -987,10 +987,13 @@ class ProjectManager:
 
     def save_messages(self) -> None:
         """Persist current conversation to base_dir/_sessions/."""
+        path = self._msg_path()
         if not self._messages:
+            # Remove stale file so cleared conversations stay cleared
+            if path.exists():
+                path.unlink()
             return
         try:
-            path = self._msg_path()
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(self._messages, f, default=str)
             _log.info("Saved %d PM messages", len(self._messages))
@@ -1013,3 +1016,7 @@ class ProjectManager:
         """Clear conversation history in memory."""
         self._messages.clear()
         _log.info("Cleared PM messages")
+
+    def get_messages(self) -> list[dict]:
+        """Return a copy of the current conversation history."""
+        return list(self._messages)

@@ -52,10 +52,10 @@ class EngineerManagerRegistry:
             mcp_server_registry=self._mcp_server_registry,
         )
         self._managers[key] = mgr
-        if auto_start:
-            mgr.start()
         if self._base_dir:
             mgr.load_messages(self._base_dir)
+        if auto_start:
+            mgr.start()
         _log.info("Created EngineerManager for %s", workdir)
         return mgr
 

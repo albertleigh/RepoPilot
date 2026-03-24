@@ -151,6 +151,62 @@ class BaseChatTab(BaseTab):
         self.chat_cleared.emit()
 
     # ------------------------------------------------------------------
+    # Replay persisted LLM messages into the display
+    # ------------------------------------------------------------------
+
+    def replay_history(self, messages: list[dict], **kw) -> None:
+        """Render a list of LLM-format messages into the chat display.
+
+        Supports both Anthropic and OpenAI message formats.
+        Keyword arguments (e.g. ``sender``, ``avatar``) are forwarded to
+        the display helpers for assistant messages.
+        """
+        for msg in messages:
+            role = msg.get("role", "")
+            content = msg.get("content", "")
+
+            if role == "user":
+                if isinstance(content, str):
+                    self.display.add_user_message(content)
+                continue
+
+            if role == "assistant":
+                # Text content (both formats)
+                if isinstance(content, str) and content:
+                    self.display.add_assistant_message(content, **kw)
+                elif isinstance(content, list):
+                    # Anthropic format: content is a list of blocks
+                    for block in content:
+                        if not isinstance(block, dict):
+                            continue
+                        btype = block.get("type", "")
+                        if btype == "text" and block.get("text"):
+                            self.display.add_assistant_message(
+                                block["text"], **kw,
+                            )
+                        elif btype == "tool_use":
+                            self.display.add_tool_call(
+                                block.get("name", "?"),
+                                str(block.get("input", "")),
+                            )
+                # OpenAI format: tool_calls as a separate field
+                for tc in msg.get("tool_calls", []):
+                    fn = tc.get("function", {})
+                    self.display.add_tool_call(
+                        fn.get("name", "?"),
+                        fn.get("arguments", ""),
+                    )
+                continue
+
+            if role == "tool":
+                # OpenAI tool result format
+                if isinstance(content, str) and content:
+                    tool_call_id = msg.get("tool_call_id", "")
+                    self.display.add_tool_result(
+                        tool_call_id, content[:2000],
+                    )
+
+    # ------------------------------------------------------------------
     # Windowed history — scroll-up loading
     # ------------------------------------------------------------------
 

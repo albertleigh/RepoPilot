@@ -742,10 +742,13 @@ class EngineerManager:
 
     def save_messages(self, base_dir: Path) -> None:
         """Persist current conversation to *base_dir*/_sessions/."""
+        path = self._msg_path(base_dir)
         if not self._messages:
+            # Remove stale file so cleared conversations stay cleared
+            if path.exists():
+                path.unlink()
             return
         try:
-            path = self._msg_path(base_dir)
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(self._messages, f, default=str)
             _log.info("Saved %d messages for %s", len(self._messages), self.workdir.name)
@@ -768,3 +771,7 @@ class EngineerManager:
         """Clear conversation history in memory."""
         self._messages.clear()
         _log.info("Cleared messages for %s", self.workdir.name)
+
+    def get_messages(self) -> list[dict]:
+        """Return a copy of the current conversation history."""
+        return list(self._messages)
