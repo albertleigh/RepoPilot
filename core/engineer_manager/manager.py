@@ -728,3 +728,43 @@ class EngineerManager:
     @property
     def is_running(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
+
+    # ------------------------------------------------------------------
+    # Message persistence
+    # ------------------------------------------------------------------
+
+    def _msg_path(self, base_dir: Path) -> Path:
+        """Return the path for persisting this engineer's messages."""
+        d = base_dir / "_sessions"
+        d.mkdir(parents=True, exist_ok=True)
+        safe_name = self.workdir.name.replace(" ", "_")
+        return d / f"EM_{safe_name}.json"
+
+    def save_messages(self, base_dir: Path) -> None:
+        """Persist current conversation to *base_dir*/_sessions/."""
+        if not self._messages:
+            return
+        try:
+            path = self._msg_path(base_dir)
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(self._messages, f, default=str)
+            _log.info("Saved %d messages for %s", len(self._messages), self.workdir.name)
+        except Exception as e:
+            _log.warning("Failed to save messages for %s: %s", self.workdir.name, e)
+
+    def load_messages(self, base_dir: Path) -> None:
+        """Restore conversation from *base_dir*/_sessions/ if available."""
+        path = self._msg_path(base_dir)
+        if not path.exists():
+            return
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                self._messages = json.load(f)
+            _log.info("Restored %d messages for %s", len(self._messages), self.workdir.name)
+        except Exception as e:
+            _log.warning("Failed to load messages for %s: %s", self.workdir.name, e)
+
+    def clear_messages(self) -> None:
+        """Clear conversation history in memory."""
+        self._messages.clear()
+        _log.info("Cleared messages for %s", self.workdir.name)

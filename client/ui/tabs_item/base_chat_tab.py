@@ -28,6 +28,7 @@ class BaseChatTab(BaseTab):
 
     message_sent = Signal(str)
     stop_requested = Signal()  # emitted when the user clicks stop
+    chat_cleared = Signal()    # emitted when the user clicks clear
 
     def __init__(
         self,
@@ -147,6 +148,7 @@ class BaseChatTab(BaseTab):
     def clear_chat(self):
         self.display.clear()
         self._history = ChatHistory(base_dir=self._history._base_dir)
+        self.chat_cleared.emit()
 
     # ------------------------------------------------------------------
     # Windowed history — scroll-up loading

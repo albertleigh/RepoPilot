@@ -62,6 +62,7 @@ class ProjectManagerRegistry:
             mcp_server_registry=self._mcp_server_registry,
             base_dir=self._base_dir,
         )
+        self._instance.load_messages()
         if auto_start:
             self._instance.start()
         _log.info("Created ProjectManager with LLM %s", type(llm_client).__name__)
@@ -76,6 +77,7 @@ class ProjectManagerRegistry:
 
     def shutdown(self) -> None:
         if self._instance:
+            self._instance.save_messages()
             self._instance.shutdown()
             self._instance = None
             _log.info("ProjectManager shut down")

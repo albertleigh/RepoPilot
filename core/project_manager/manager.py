@@ -974,3 +974,42 @@ class ProjectManager:
     @property
     def is_running(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
+
+    # ------------------------------------------------------------------
+    # Message persistence
+    # ------------------------------------------------------------------
+
+    def _msg_path(self) -> Path:
+        """Return the path for persisting PM messages."""
+        d = self._base_dir / "_sessions"
+        d.mkdir(parents=True, exist_ok=True)
+        return d / "PM.json"
+
+    def save_messages(self) -> None:
+        """Persist current conversation to base_dir/_sessions/."""
+        if not self._messages:
+            return
+        try:
+            path = self._msg_path()
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(self._messages, f, default=str)
+            _log.info("Saved %d PM messages", len(self._messages))
+        except Exception as e:
+            _log.warning("Failed to save PM messages: %s", e)
+
+    def load_messages(self) -> None:
+        """Restore conversation from base_dir/_sessions/ if available."""
+        path = self._msg_path()
+        if not path.exists():
+            return
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                self._messages = json.load(f)
+            _log.info("Restored %d PM messages", len(self._messages))
+        except Exception as e:
+            _log.warning("Failed to load PM messages: %s", e)
+
+    def clear_messages(self) -> None:
+        """Clear conversation history in memory."""
+        self._messages.clear()
+        _log.info("Cleared PM messages")
