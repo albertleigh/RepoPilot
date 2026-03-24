@@ -807,7 +807,7 @@ class ProjectManager:
                     phase="compressing",
                     detail="Compacting conversation history\u2026",
                 ))
-                msgs[:] = auto_compact(msgs, self._llm, self._base_dir)
+                msgs[:] = auto_compact(msgs, self._llm, self._base_dir, prefix="PM_")
 
             # -- drain background notifications --
             bg_notifs: list[str] = []
@@ -918,7 +918,7 @@ class ProjectManager:
             msgs.extend(self._llm.make_tool_results(results))
 
             if manual_compress:
-                msgs[:] = auto_compact(msgs, self._llm, self._base_dir)
+                msgs[:] = auto_compact(msgs, self._llm, self._base_dir, prefix="PM_")
 
         if self._cancel.is_set():
             msgs.append({"role": "assistant", "content": "[Cancelled by user]"})

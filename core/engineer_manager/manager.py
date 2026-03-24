@@ -495,7 +495,7 @@ class EngineerManager:
                     phase="compressing",
                     detail="Compacting conversation history\u2026",
                 ))
-                msgs[:] = auto_compact(msgs, self._llm, self.workdir)
+                msgs[:] = auto_compact(msgs, self._llm, self.workdir, prefix=f"EM_{self.workdir.name}_")
 
             # -- drain background notifications --
             notifs = self.bg.drain()
@@ -614,7 +614,7 @@ class EngineerManager:
             # -- manual compress --
             if manual_compress:
                 _log.info("Manual compact for %s", self.workdir)
-                msgs[:] = auto_compact(msgs, self._llm, self.workdir)
+                msgs[:] = auto_compact(msgs, self._llm, self.workdir, prefix=f"EM_{self.workdir.name}_")
 
         # If cancelled, note it in the conversation so context is preserved
         if self._cancel.is_set():
