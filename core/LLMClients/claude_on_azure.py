@@ -96,12 +96,41 @@ class ClaudeOnAzureClient(LLMClient):
 
     # -- Tool-use interface --
 
+    @staticmethod
+    def _sanitize_messages(messages: list[dict]) -> list[dict]:
+        """Ensure all message content blocks are plain dicts.
+
+        Older sessions may have persisted raw Anthropic SDK Pydantic
+        objects (via ``json.dump(default=str)``), which load back as
+        strings instead of dicts.  This converts or drops any such
+        blocks so the API receives valid input.
+        """
+        for msg in messages:
+            content = msg.get("content")
+            if not isinstance(content, list):
+                continue
+            cleaned: list[dict] = []
+            for block in content:
+                if isinstance(block, dict):
+                    cleaned.append(block)
+                elif hasattr(block, "model_dump"):
+                    # Raw Pydantic SDK object still in memory
+                    cleaned.append(block.model_dump())
+                elif isinstance(block, str):
+                    # Stringified SDK object loaded from disk — wrap as text
+                    cleaned.append({"type": "text", "text": block})
+                else:
+                    cleaned.append({"type": "text", "text": str(block)})
+            msg["content"] = cleaned
+        return messages
+
     def send_with_tools(
         self,
         messages: list[dict],
         tools: list[dict],
         system: str = "",
     ) -> LLMResponse:
+        self._sanitize_messages(messages)
         kwargs: dict = {
             "model": self._model_id,
             "max_tokens": self.MAX_TOKENS,
@@ -114,12 +143,25 @@ class ClaudeOnAzureClient(LLMClient):
 
         text_parts: list[str] = []
         tool_calls: list[ToolCall] = []
+        serialized_content: list[dict] = []
         for block in response.content:
             if block.type == "text":
                 text_parts.append(block.text)
+                serialized_content.append({"type": "text", "text": block.text})
             elif block.type == "tool_use":
                 tool_calls.append(
                     ToolCall(id=block.id, name=block.name, input=block.input)
+                )
+                serialized_content.append({
+                    "type": "tool_use",
+                    "id": block.id,
+                    "name": block.name,
+                    "input": block.input,
+                })
+            else:
+                # Preserve any other block types (e.g. thinking) as dicts
+                serialized_content.append(
+                    block.model_dump() if hasattr(block, "model_dump") else block
                 )
 
         return LLMResponse(
@@ -128,7 +170,7 @@ class ClaudeOnAzureClient(LLMClient):
             stop_reason=(
                 "tool_use" if response.stop_reason == "tool_use" else "end_turn"
             ),
-            assistant_message={"role": "assistant", "content": response.content},
+            assistant_message={"role": "assistant", "content": serialized_content},
         )
 
     def make_tool_results(self, results: list[dict]) -> list[dict]:
