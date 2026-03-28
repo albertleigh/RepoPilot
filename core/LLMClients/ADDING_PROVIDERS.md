@@ -187,3 +187,171 @@ show its fields, and construct instances via `cls(**kwargs)`.
 Add any required Python packages to `requirements-client.txt`.
 
 That's it! The new provider will appear in the dropdown automatically.
+
+---
+
+## Agentic SDK Providers (e.g. Copilot SDK)
+
+Some providers ship an **agentic SDK** that manages its own tool-calling
+loop internally (JSON-RPC to a CLI subprocess, built-in file/shell
+tools, etc.).  These require a fundamentally different integration
+pattern compared to simple REST-based API providers.
+
+Reference implementation: `copilot_sdk.py` (GitHub Copilot SDK).
+
+### How agentic SDKs differ
+
+| Concern | REST API provider | Agentic SDK provider |
+|---|---|---|
+| Tool dispatch | RepoPilot's loop calls tools, feeds results back | SDK runs its own loop; returns final text |
+| `send_with_tools` | Returns `tool_use` stop reason + `ToolCall` list | Always returns `end_turn` (SDK handles tools internally) |
+| `make_tool_results` | Translates results to provider format | No-op (returns `[]`) |
+| Lifecycle | Stateless HTTP calls | Long-lived subprocess with sessions |
+| Concurrency | Naturally thread-safe (independent HTTP requests) | Must isolate state per calling thread |
+
+### Challenge 1: Async ↔ sync bridge
+
+RepoPilot's agent threads are synchronous (`threading.Thread`), but
+agentic SDKs are typically async-only.  Bridge with a dedicated asyncio
+event loop:
+
+```python
+def _run(self, coro, *, timeout=300):
+    ctx = self._get_caller_ctx()
+    self._ensure_loop(ctx)
+    fut = asyncio.run_coroutine_threadsafe(coro, ctx.loop)
+    return fut.result(timeout=timeout)
+```
+
+### Challenge 2: Per-caller isolation
+
+A single `LLMClient` instance is shared across the Project Manager,
+multiple Engineer Managers (one per repo), teammate threads, and
+subagent threads.  If any mutable state (session, tool handlers,
+event loop) is shared, callers will interfere with each other.
+
+**Solution:** A `_CallerContext` dataclass keyed by `threading.get_ident()`.
+Each caller thread gets its own fully isolated set of resources:
+
+```python
+@dataclass
+class _CallerContext:
+    loop: Any = None           # dedicated asyncio event loop
+    loop_thread: Any = None    # thread running the event loop
+    client: Any = None         # SDK client (own subprocess)
+    session: Any = None        # active session
+    tool_handlers: dict = ...  # registered tool dispatch map
+    mcp_registry: Any = None   # MCP server registry
+```
+
+Key lessons learned during implementation:
+
+1. **Separate event loops** — Sharing one asyncio event loop across
+   multiple SDK client instances causes internal event routing to break
+   (e.g. `session.idle` fires immediately with 0 messages collected).
+   Each caller must get its own `asyncio.new_event_loop()`.
+
+2. **Separate SDK client instances** — Sharing one SDK client (CLI
+   subprocess) across multiple sessions causes the same event confusion.
+   Each caller must get its own client with its own subprocess.
+
+3. **Thread-safe registration** — `register_tool_handlers()` is called
+   from the caller's own thread, so it must store handlers in the
+   per-thread context, not in shared instance state.
+
+### Challenge 3: Tool name conflicts
+
+Agentic SDKs have their own built-in tools.  If any RepoPilot tool name
+collides with a built-in, the SDK will error:
+
+```
+External tool "task" conflicts with a built-in tool of the same name.
+```
+
+**Solution:** Maintain a skip set of names to exclude when bridging
+tools to the SDK.  Include:
+
+- **SDK built-ins** that overlap (`bash`, `read_file`, `write_file`,
+  `edit_file`)
+- **Names that conflict** with SDK built-ins (`task`)
+- **Internal control signals** that don't make sense inside the SDK
+  agent (`compress`, `idle`)
+
+The SDK `Tool` class may offer an `overrides_built_in_tool` parameter
+if you intentionally want to override a built-in, but in most cases
+skipping is safer.
+
+### Challenge 4: Event collection
+
+Agentic SDKs use event-driven communication instead of request/response.
+You must subscribe to events and wait for a termination signal:
+
+```python
+def _on_event(event):
+    etype = event.type.value
+    if etype == "assistant.message":
+        collected.append(event.data.content)
+    elif etype == "session.idle":
+        done.set()
+    elif etype == "session.error":
+        log_error(event.data.message)
+        done.set()
+
+unsub = session.on(_on_event)
+await session.send(message)
+await asyncio.wait_for(done.wait(), timeout=300)
+```
+
+Always handle `session.error` — tool conflicts and auth failures
+surface here, not as exceptions from `session.send()`.
+
+### Challenge 5: FIELDS extensions
+
+The standard `FIELDS` system supports `"type": "text"` (default).
+Agentic SDKs may need:
+
+- `"type": "action"` — A button (e.g. "Login with GitHub") that calls
+  `cls.on_field_action(key)` and shows the result in a message box.
+- `"type": "choices"` — An editable combo-box populated by
+  `cls.get_field_choices(key)` (e.g. dynamic model list from the SDK).
+
+### Challenge 6: Resource cleanup
+
+Override `close()` to tear down all per-caller resources.  This is
+called by the registry when the client is replaced or unregistered:
+
+```python
+def close(self):
+    with self._callers_lock:
+        callers = list(self._callers.items())
+        self._callers.clear()
+    for tid, ctx in callers:
+        # async cleanup on the caller's own event loop
+        fut = asyncio.run_coroutine_threadsafe(
+            self._cleanup_ctx(ctx), ctx.loop,
+        )
+        fut.result(timeout=10)
+        ctx.loop.call_soon_threadsafe(ctx.loop.stop)
+```
+
+### Wiring tool handlers
+
+For the SDK to invoke RepoPilot's custom tools (TodoWrite, MCP tools,
+skills, etc.), each call site that uses `send_with_tools` must call
+`register_tool_handlers()` beforehand.  This is done via duck-typing:
+
+```python
+# In the manager's _run_tool_loop:
+_register = getattr(self._llm, "register_tool_handlers", None)
+if callable(_register):
+    _register(self._handlers, self._mcp)
+```
+
+This must be added in **every** place that calls `send_with_tools`:
+
+- `EngineerManager._run_tool_loop` (main agent loop)
+- `EngineerManager._run_subagent` (subagent loop)
+- `TeammateManager._loop` (teammate loop)
+- `ProjectManager._run_tool_loop` (PM loop)
+
+For non-SDK providers, the `getattr` check is a no-op.
