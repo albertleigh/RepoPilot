@@ -21,9 +21,21 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
+from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from .base import LLMClient, LLMResponse, ToolCall
+
+
+@dataclass
+class _CallerContext:
+    """Per-thread state so concurrent callers each get their own session."""
+
+    session: Any = None
+    last_system: str = ""
+    last_tool_names: frozenset[str] = field(default_factory=frozenset)
+    tool_handlers: dict[str, Callable[..., Any]] = field(default_factory=dict)
+    mcp_registry: Any = None
 
 _log = logging.getLogger(__name__)
 
@@ -177,16 +189,15 @@ class CopilotSDKClient(LLMClient):
         self._loop: asyncio.AbstractEventLoop | None = None
         self._loop_thread: threading.Thread | None = None
 
-        # SDK objects (created lazily)
+        # Shared SDK client (created lazily, shared across callers)
         self._client = None           # CopilotClient
-        self._session = None          # Active session
-        self._last_system: str = ""   # System prompt used to create session
-        self._last_tool_names: frozenset[str] = frozenset()
         self._lock = threading.Lock() # Guards lazy init
 
-        # External tool dispatch (set by engineer manager)
-        self._tool_handlers: dict[str, Callable[..., Any]] = {}
-        self._mcp_registry = None     # optional McpServerRegistry
+        # Per-caller sessions keyed by thread ID.  Each engineer,
+        # project manager, or teammate thread gets its own session,
+        # tool handlers, and system prompt so they don't interfere.
+        self._callers: dict[int, _CallerContext] = {}
+        self._callers_lock = threading.Lock()
 
     # ------------------------------------------------------------------ #
     #  External tool registration                                         #
@@ -199,12 +210,26 @@ class CopilotSDKClient(LLMClient):
     ) -> None:
         """Register RepoPilot tool handlers so the SDK can invoke them.
 
-        Called by the engineer manager before entering its tool loop.
+        Called by the engineer/PM/teammate before entering its tool loop.
         *handlers* maps tool name → callable(**kwargs) → str.
         *mcp_registry* is the optional ``McpServerRegistry`` for MCP tools.
+
+        State is stored per-thread so concurrent callers don't
+        overwrite each other's handlers.
         """
-        self._tool_handlers = handlers
-        self._mcp_registry = mcp_registry
+        ctx = self._get_caller_ctx()
+        ctx.tool_handlers = handlers
+        ctx.mcp_registry = mcp_registry
+
+    def _get_caller_ctx(self) -> _CallerContext:
+        """Return the ``_CallerContext`` for the current thread."""
+        tid = threading.get_ident()
+        with self._callers_lock:
+            ctx = self._callers.get(tid)
+            if ctx is None:
+                ctx = _CallerContext()
+                self._callers[tid] = ctx
+            return ctx
 
     # ------------------------------------------------------------------ #
     #  Async ↔ sync bridge                                                #
@@ -256,6 +281,7 @@ class CopilotSDKClient(LLMClient):
 
     async def _ensure_session(
         self,
+        caller_ctx: _CallerContext,
         system: str = "",
         sdk_tools: list | None = None,
     ):
@@ -265,20 +291,20 @@ class CopilotSDKClient(LLMClient):
             t.name if hasattr(t, "name") else "" for t in (sdk_tools or [])
         )
         need_new = (
-            self._session is None
-            or (system and system != self._last_system)
-            or tool_names != self._last_tool_names
+            caller_ctx.session is None
+            or (system and system != caller_ctx.last_system)
+            or tool_names != caller_ctx.last_tool_names
         )
         if not need_new:
-            return self._session
+            return caller_ctx.session
 
         # Tear down old session
-        if self._session is not None:
+        if caller_ctx.session is not None:
             try:
-                await self._session.disconnect()
+                await caller_ctx.session.disconnect()
             except Exception:
                 _log.debug("session disconnect error (ignored)", exc_info=True)
-            self._session = None
+            caller_ctx.session = None
 
         from copilot import PermissionHandler
 
@@ -291,12 +317,14 @@ class CopilotSDKClient(LLMClient):
         if sdk_tools:
             kw["tools"] = sdk_tools
 
-        self._session = await self._client.create_session(**kw)
-        self._last_system = system
-        self._last_tool_names = tool_names
-        return self._session
+        caller_ctx.session = await self._client.create_session(**kw)
+        caller_ctx.last_system = system
+        caller_ctx.last_tool_names = tool_names
+        return caller_ctx.session
 
-    def _build_sdk_tools(self, tool_defs: list[dict]) -> list:
+    def _build_sdk_tools(
+        self, tool_defs: list[dict], caller_ctx: _CallerContext,
+    ) -> list:
         """Convert RepoPilot tool definitions to SDK ``Tool`` objects.
 
         Skips tools that overlap with the SDK's built-in tools (the CLI
@@ -317,10 +345,10 @@ class CopilotSDKClient(LLMClient):
             if name in SDK_BUILTIN:
                 continue
 
-            handler_fn = self._tool_handlers.get(name)
+            handler_fn = caller_ctx.tool_handlers.get(name)
             is_mcp = (
-                self._mcp_registry is not None
-                and self._mcp_registry.is_mcp_tool(name)
+                caller_ctx.mcp_registry is not None
+                and caller_ctx.mcp_registry.is_mcp_tool(name)
             )
             if not handler_fn and not is_mcp:
                 continue
@@ -328,17 +356,18 @@ class CopilotSDKClient(LLMClient):
             # Translate Anthropic schema → SDK parameters
             schema = tdef.get("input_schema", {})
 
-            # Capture name/handler in closure
+            # Capture name/handler/mcp_registry in closure
             def _make_handler(
                 tool_name: str,
                 h: Callable[..., Any] | None,
                 mcp: bool,
+                mcp_reg,
             ):
                 def _handler(invocation: ToolInvocation) -> ToolResult:
                     args = invocation.arguments or {}
                     try:
-                        if mcp and self._mcp_registry:
-                            out = self._mcp_registry.call_mcp_tool(
+                        if mcp and mcp_reg:
+                            out = mcp_reg.call_mcp_tool(
                                 tool_name, args,
                             )
                         elif h:
@@ -357,18 +386,23 @@ class CopilotSDKClient(LLMClient):
                 name=name,
                 description=tdef.get("description", ""),
                 parameters=schema,
-                handler=_make_handler(name, handler_fn, is_mcp),
+                handler=_make_handler(
+                    name, handler_fn, is_mcp, caller_ctx.mcp_registry,
+                ),
             ))
         return sdk_tools
 
     async def _send_and_collect(
         self,
         message: str,
+        caller_ctx: _CallerContext,
         system: str = "",
         sdk_tools: list | None = None,
     ) -> str:
         """Send *message*, wait for the agent to go idle, return text."""
-        session = await self._ensure_session(system, sdk_tools=sdk_tools)
+        session = await self._ensure_session(
+            caller_ctx, system, sdk_tools=sdk_tools,
+        )
         done = asyncio.Event()
         collected: list[str] = []
 
@@ -392,12 +426,18 @@ class CopilotSDKClient(LLMClient):
         return "\n".join(collected) if collected else ""
 
     async def _cleanup(self):
-        try:
-            if self._session:
-                await self._session.disconnect()
-                self._session = None
-        except Exception:
-            pass
+        # Disconnect all per-caller sessions
+        with self._callers_lock:
+            callers = list(self._callers.values())
+            self._callers.clear()
+        for ctx in callers:
+            try:
+                if ctx.session:
+                    await ctx.session.disconnect()
+                    ctx.session = None
+            except Exception:
+                pass
+        # Stop shared client
         try:
             if self._client:
                 await self._client.stop()
@@ -411,7 +451,7 @@ class CopilotSDKClient(LLMClient):
 
     def close(self) -> None:
         """Shut down the CLI subprocess and background event loop."""
-        if self._loop and (self._client or self._session):
+        if self._loop and (self._client or self._callers):
             try:
                 fut = asyncio.run_coroutine_threadsafe(
                     self._cleanup(), self._loop
@@ -431,15 +471,18 @@ class CopilotSDKClient(LLMClient):
         return self._model
 
     def send_message(self, message: str, history: list[dict] | None = None) -> str:
-        return self._run(self._send_and_collect(message))
+        ctx = self._get_caller_ctx()
+        return self._run(self._send_and_collect(message, ctx))
 
     def send_messages(self, messages: list[dict]) -> str:
+        ctx = self._get_caller_ctx()
         last_user = self._extract_last_user_message(messages)
-        return self._run(self._send_and_collect(last_user))
+        return self._run(self._send_and_collect(last_user, ctx))
 
     def is_available(self) -> bool:
         try:
-            self._run(self._ensure_session(), timeout=30)
+            ctx = self._get_caller_ctx()
+            self._run(self._ensure_session(ctx), timeout=30)
             return True
         except Exception:
             _log.debug("Copilot SDK not available", exc_info=True)
@@ -459,7 +502,11 @@ class CopilotSDKClient(LLMClient):
         We pass the latest user message, wait for the agent to finish all
         rounds, and return the final assistant text with
         ``stop_reason="end_turn"``.
+
+        Each calling thread gets its own SDK session so concurrent
+        engineers / PM / teammates don't interfere.
         """
+        ctx = self._get_caller_ctx()
         last_user = self._extract_last_user_message(messages)
         if not last_user:
             return LLMResponse(
@@ -469,9 +516,11 @@ class CopilotSDKClient(LLMClient):
                 assistant_message={"role": "assistant", "content": ""},
             )
 
-        sdk_tools = self._build_sdk_tools(tools) if tools else None
+        sdk_tools = self._build_sdk_tools(tools, ctx) if tools else None
         text = self._run(
-            self._send_and_collect(last_user, system=system, sdk_tools=sdk_tools)
+            self._send_and_collect(
+                last_user, ctx, system=system, sdk_tools=sdk_tools,
+            )
         )
         return LLMResponse(
             text=text,
