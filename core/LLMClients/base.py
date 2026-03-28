@@ -176,6 +176,14 @@ class LLMClient(ABC):
         Returns one or more message dicts to append to the conversation.
         """
 
+    def close(self) -> None:
+        """Release resources held by this client.
+
+        Called by the registry when the client is replaced or removed.
+        Override in subclasses that manage long-lived resources (e.g.
+        background processes, persistent sessions).
+        """
+
 
 class LLMProviderRegistry:
     """Registry that maps provider names to their LLMClient subclasses.
@@ -265,13 +273,24 @@ class LLMClientRegistry:
     def update(self, name: str, client: LLMClient,
                config: dict | None = None) -> None:
         """Replace an existing client's instance and config in-place."""
+        old = self._clients.get(name)
+        if old is not None and old is not client:
+            try:
+                old.close()
+            except Exception:
+                _log.debug("close() failed for %r", name, exc_info=True)
         self._clients[name] = client
         if config is not None:
             self._configs[name] = config
         self._save()
 
     def unregister(self, name: str) -> None:
-        self._clients.pop(name, None)
+        old = self._clients.pop(name, None)
+        if old is not None:
+            try:
+                old.close()
+            except Exception:
+                _log.debug("close() failed for %r", name, exc_info=True)
         self._configs.pop(name, None)
         if self._selected == name:
             self._selected = None

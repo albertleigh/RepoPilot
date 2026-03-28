@@ -303,6 +303,21 @@ class CopilotSDKClient(LLMClient):
     #  LLMClient interface                                                #
     # ------------------------------------------------------------------ #
 
+    def close(self) -> None:
+        """Shut down the CLI subprocess and background event loop."""
+        if self._loop and (self._client or self._session):
+            try:
+                fut = asyncio.run_coroutine_threadsafe(
+                    self._cleanup(), self._loop
+                )
+                fut.result(timeout=10)
+            except Exception:
+                _log.debug("close() cleanup error", exc_info=True)
+        if self._loop and self._loop.is_running():
+            self._loop.call_soon_threadsafe(self._loop.stop)
+            self._loop = None
+            self._loop_thread = None
+
     def provider_name(self) -> str:
         return self.PROVIDER
 
@@ -381,8 +396,7 @@ class CopilotSDKClient(LLMClient):
         return ""
 
     def __del__(self):
-        if self._loop and (self._client or self._session):
-            try:
-                asyncio.run_coroutine_threadsafe(self._cleanup(), self._loop)
-            except Exception:
-                pass
+        try:
+            self.close()
+        except Exception:
+            pass
