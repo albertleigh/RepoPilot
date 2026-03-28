@@ -52,7 +52,15 @@ class LLMClient(ABC):
               "default":     str,   # pre-filled value ("" if empty)
               "required":    bool,
               "secret":      bool,  # True → password echo mode
+              "type":        str,   # "text" (default), "action", or "choices"
           }
+
+      Action fields render as a button instead of a text input.
+      Clicking the button calls ``cls.on_field_action(key)``.
+
+      Choices fields render as an editable combo-box populated by
+      ``cls.get_field_choices(key)``.  The user can pick from the
+      list or type a custom value.
     """
 
     PROVIDER: str = ""
@@ -60,6 +68,29 @@ class LLMClient(ABC):
     FIELDS: list[dict] = []
     RETRY_MAX_ATTEMPTS: int = 3
     RETRY_WAIT_SECONDS: int = 60
+
+    @classmethod
+    def on_field_action(cls, key: str) -> dict:
+        """Handle a FIELDS entry of ``"type": "action"``.
+
+        Called by the creation / configure dialog when the user clicks
+        an action button.  *key* is the ``"key"`` value of the field.
+
+        Returns a dict with ``"status"`` (``"ok"`` | ``"error"`` |
+        ``"launched"``) and an optional ``"message"`` string that the
+        dialog will display.
+        """
+        return {}
+
+    @classmethod
+    def get_field_choices(cls, key: str) -> list[str]:
+        """Return available choices for a ``"type": "choices"`` field.
+
+        Called by the dialog when rendering a choices field.  Override
+        in subclasses to provide dynamic lists (e.g. model names from
+        an API).  Return an empty list to show an empty editable combo.
+        """
+        return []
 
     # Exception types considered transient connection failures.
     _TRANSIENT_EXC_NAMES = frozenset({

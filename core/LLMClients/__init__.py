@@ -4,6 +4,7 @@ Abstract base and concrete implementations for LLM service providers.
 """
 from .base import LLMClient, LLMClientRegistry, LLMProviderRegistry
 from .claude_on_azure import ClaudeOnAzureClient
+from .copilot_sdk import CopilotSDKClient
 from .gpt51_codex_max_on_azure import GPT51CodexMaxOnAzureClient
 from .gpt53_codex_on_azure import GPT53CodexOnAzureClient
 from .gpt5_codex_on_azure import GPT5CodexOnAzureClient
@@ -17,6 +18,7 @@ __all__ = [
     "LLMClientRegistry",
     "LLMProviderRegistry",
     "ClaudeOnAzureClient",
+    "CopilotSDKClient",
     "GPT51CodexMaxOnAzureClient",
     "GPT53CodexOnAzureClient",
     "GPT5CodexOnAzureClient",

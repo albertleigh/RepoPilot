@@ -7,6 +7,7 @@ PySide6-Addons>=6.6.0
 # LLM API Clients
 anthropic>=0.25.0
 openai>=2.26.0
+github-copilot-sdk>=0.2.0
 
 # Chat display
 markdown>=3.5.0
