@@ -732,8 +732,12 @@ class EngineerManager:
 
     def shutdown(self) -> None:
         """Signal the loop to stop and wait for the thread to finish."""
-        _log.info("shutdown() called for %s (thread_alive=%s)",
-                  self.workdir, self._thread.is_alive() if self._thread else False)
+        import traceback
+        _log.info("shutdown() called for %s (thread_alive=%s, status=%s)\n%s",
+                  self.workdir,
+                  self._thread.is_alive() if self._thread else False,
+                  self.status.name,
+                  "".join(traceback.format_stack()))
         self._stop.set()
         self._wake.set()  # unblock if waiting
         if self._thread:
