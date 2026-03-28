@@ -488,7 +488,7 @@ class MainWindow(QMainWindow):
             sync_skills_to_repo(self.ctx.base_dir / "skills", workdir)
 
         def _on_synced(_result=None):
-            self.ctx.engineer_manager_registry.create(workdir, llm_client, auto_start=True)
+            mgr = self.ctx.engineer_manager_registry.create(workdir, llm_client, auto_start=True)
             self.left_panel.repo_tree.refresh()
             self.on_open_engineer_chat(repo_name)
             self.statusBar().showMessage(f"Engineer started for {repo_name}")
@@ -524,16 +524,21 @@ class MainWindow(QMainWindow):
             # (the old manager may have been removed and a new one created)
             mgr = self.ctx.engineer_manager_registry.get(workdir)
             if mgr is not None:
-                try:
+                if getattr(tab, '_signals_wired', False):
                     tab.message_sent.disconnect()
-                except RuntimeError:
-                    pass
-                try:
                     tab.stop_requested.disconnect()
-                except RuntimeError:
-                    pass
+                    tab.chat_cleared.disconnect()
                 tab.message_sent.connect(mgr.send_message)
                 tab.stop_requested.connect(mgr.cancel)
+                tab.chat_cleared.connect(mgr.clear_messages)
+                tab._signals_wired = True
+                # Replay restored conversation if display is empty
+                if tab.display.is_empty():
+                    msgs = mgr.get_messages()
+                    if msgs:
+                        tab.replay_history(
+                            msgs, sender="Engineer", avatar="\U0001F916",
+                        )
             self.chat_tabs.focus_tab(tab)
         else:
             tab = EngineerChatTab(
@@ -543,12 +548,21 @@ class MainWindow(QMainWindow):
                 llm_name=self.ctx.llm_client_registry.selected_name() or "",
             )
             self._open_tab(tab)
+            tab._signals_wired = False
 
             # Wire signals only once, when the tab is first created
             mgr = self.ctx.engineer_manager_registry.get(workdir)
             if mgr is not None:
                 tab.message_sent.connect(mgr.send_message)
                 tab.stop_requested.connect(mgr.cancel)
+                tab.chat_cleared.connect(mgr.clear_messages)
+                tab._signals_wired = True
+                # Replay any restored conversation into the display
+                msgs = mgr.get_messages()
+                if msgs:
+                    tab.replay_history(
+                        msgs, sender="Engineer", avatar="\U0001F916",
+                    )
 
     # ------------------------------------------------------------------
     # Engineer lifecycle (tree refresh only)
@@ -583,12 +597,16 @@ class MainWindow(QMainWindow):
                 llm_name = self.ctx.llm_client_registry.selected_name() or ""
                 tab.set_llm_name(llm_name)
                 # Reconnect signals to the new PM instance
-                tab.message_sent.disconnect()
-                tab.stop_requested.disconnect()
-                tab.shutdown_requested.disconnect()
+                if getattr(tab, '_signals_wired', False):
+                    tab.message_sent.disconnect()
+                    tab.stop_requested.disconnect()
+                    tab.shutdown_requested.disconnect()
+                    tab.chat_cleared.disconnect()
                 tab.message_sent.connect(pm.send_message)
                 tab.stop_requested.connect(pm.cancel)
                 tab.shutdown_requested.connect(self._on_pm_shutdown)
+                tab.chat_cleared.connect(pm.clear_messages)
+                tab._signals_wired = True
                 self.statusBar().showMessage("Project Manager restarted")
             self.chat_tabs.focus_tab(tab)
             return
@@ -618,9 +636,26 @@ class MainWindow(QMainWindow):
         tab.message_sent.connect(pm.send_message)
         tab.stop_requested.connect(pm.cancel)
         tab.shutdown_requested.connect(self._on_pm_shutdown)
+        tab.chat_cleared.connect(pm.clear_messages)
+        tab._signals_wired = True
+        # Replay any restored conversation into the display
+        msgs = pm.get_messages()
+        if msgs:
+            tab.replay_history(
+                msgs, sender="Project Manager", avatar="\U0001F4CB",
+            )
         self.statusBar().showMessage("Project Manager opened")
 
     def _on_pm_shutdown(self):
         """Shut down the ProjectManager completely (can be restarted later)."""
         self.ctx.project_manager_registry.shutdown()
         self.statusBar().showMessage("Project Manager shut down")
+
+    # ------------------------------------------------------------------
+    # Window close — persist agent state
+    # ------------------------------------------------------------------
+
+    def closeEvent(self, event):
+        """Save all in-memory messages before the window is destroyed."""
+        self.ctx.shutdown()
+        super().closeEvent(event)

@@ -163,6 +163,10 @@ class ChatDisplay(QScrollArea):
         self._pending_group_wrapper = None
         self.hide_thinking()
 
+    def is_empty(self) -> bool:
+        """Return True if no messages have been added."""
+        return len(self._items) == 0
+
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------

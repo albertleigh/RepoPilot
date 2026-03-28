@@ -19,10 +19,12 @@ class EngineerManagerRegistry:
     """Maps normalised repo paths to live :class:`EngineerManager` instances."""
 
     def __init__(self, event_bus: EventBus | None = None,
-                 mcp_server_registry: McpServerRegistry | None = None) -> None:
+                 mcp_server_registry: McpServerRegistry | None = None,
+                 base_dir: Path | None = None) -> None:
         self._managers: dict[str, EngineerManager] = {}
         self._event_bus = event_bus
         self._mcp_server_registry = mcp_server_registry
+        self._base_dir = base_dir
 
     @staticmethod
     def _key(workdir: Path) -> str:
@@ -50,6 +52,8 @@ class EngineerManagerRegistry:
             mcp_server_registry=self._mcp_server_registry,
         )
         self._managers[key] = mgr
+        if self._base_dir:
+            mgr.load_messages(self._base_dir)
         if auto_start:
             mgr.start()
         _log.info("Created EngineerManager for %s", workdir)
@@ -63,6 +67,8 @@ class EngineerManagerRegistry:
         key = self._key(workdir)
         mgr = self._managers.pop(key, None)
         if mgr:
+            if self._base_dir:
+                mgr.save_messages(self._base_dir)
             mgr.shutdown()
             _log.info("Removed EngineerManager for %s", workdir)
 
@@ -76,5 +82,7 @@ class EngineerManagerRegistry:
     def shutdown_all(self) -> None:
         """Stop every active manager."""
         for mgr in self._managers.values():
+            if self._base_dir:
+                mgr.save_messages(self._base_dir)
             mgr.shutdown()
         self._managers.clear()

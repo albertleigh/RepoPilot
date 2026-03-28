@@ -428,7 +428,7 @@ class EngineerManager:
         """
         rounds_without_todo = 0
         msgs = self._messages
-        _log.debug("[DIAG] _agent_loop STARTED for %s", self.workdir)
+        _log.info("_agent_loop ENTERED for %s (thread=%s)", self.workdir, threading.current_thread().name)
 
         while not self._stop.is_set():
             # --- block until woken (no busy-wait) ---
@@ -473,9 +473,13 @@ class EngineerManager:
                     self._emit_event(EngineerStoppedEvent(workdir=str(self.workdir)))
                     _log.debug("[DIAG] _agent_loop emitted STOPPED, back to drain for %s", self.workdir)
 
+        _log.info("_agent_loop EXITED for %s (stop=%s, thread=%s)",
+                  self.workdir, self._stop.is_set(), threading.current_thread().name)
+
     def _run_tool_loop(self, msgs: list, rounds_without_todo: int) -> None:
         """Inner loop: LLM call → tool dispatch → repeat until end_turn."""
         tool_round = 0
+        _log.info("_run_tool_loop ENTERED for %s (msg_count=%d)", self.workdir, len(msgs))
         while not self._stop.is_set() and not self._cancel.is_set():
             tool_round += 1
             if tool_round > MAX_TOOL_ROUNDS:
@@ -495,7 +499,7 @@ class EngineerManager:
                     phase="compressing",
                     detail="Compacting conversation history\u2026",
                 ))
-                msgs[:] = auto_compact(msgs, self._llm, self.workdir)
+                msgs[:] = auto_compact(msgs, self._llm, self.workdir, prefix=f"EM_{self.workdir.name}_")
 
             # -- drain background notifications --
             notifs = self.bg.drain()
@@ -530,9 +534,13 @@ class EngineerManager:
                 if mcp_tools:
                     all_tools = TOOLS + mcp_tools
 
-            response = self._llm.send_with_tools(
-                msgs, all_tools, self._system_prompt(),
-            )
+            try:
+                response = self._llm.send_with_tools(
+                    msgs, all_tools, self._system_prompt(),
+                )
+            except Exception:
+                _log.exception("LLM send_with_tools failed (round %d) for %s", tool_round, self.workdir)
+                raise
             _log.debug("[DIAG] LLM responded: stop_reason=%s, has_text=%s, num_tool_calls=%d for %s",
                        response.stop_reason, bool(response.text), len(response.tool_calls or []), self.workdir)
             msgs.append(response.assistant_message)
@@ -546,8 +554,8 @@ class EngineerManager:
                 ))
 
             if response.stop_reason != "tool_use":
-                _log.debug("[DIAG] _run_tool_loop DONE (stop_reason=%s) after %d rounds for %s",
-                           response.stop_reason, tool_round, self.workdir)
+                _log.info("_run_tool_loop DONE: stop_reason=%s after %d rounds for %s",
+                          response.stop_reason, tool_round, self.workdir)
                 break
 
             # -- Tool dispatch --
@@ -614,16 +622,20 @@ class EngineerManager:
             # -- manual compress --
             if manual_compress:
                 _log.info("Manual compact for %s", self.workdir)
-                msgs[:] = auto_compact(msgs, self._llm, self.workdir)
+                msgs[:] = auto_compact(msgs, self._llm, self.workdir, prefix=f"EM_{self.workdir.name}_")
 
-        # If cancelled, note it in the conversation so context is preserved
+        # Log why the loop exited
         if self._cancel.is_set():
-            _log.info("Tool loop cancelled by user for %s", self.workdir)
+            _log.info("_run_tool_loop EXITED: cancelled by user after %d rounds for %s",
+                      tool_round, self.workdir)
             msgs.append({"role": "assistant", "content": "[Cancelled by user]"})
             self._emit_event(EngineerMessageEvent(
                 workdir=str(self.workdir),
                 text="\u26d4 Stopped by user.",
             ))
+        elif self._stop.is_set():
+            _log.info("_run_tool_loop EXITED: shutdown requested after %d rounds for %s",
+                      tool_round, self.workdir)
 
     # ------------------------------------------------------------------
     # Event helpers
@@ -647,6 +659,7 @@ class EngineerManager:
     def start(self) -> None:
         """Start the agent loop in a daemon thread."""
         if self._thread and self._thread.is_alive():
+            _log.debug("start() called but thread already alive for %s", self.workdir)
             return
         self._stop.clear()
         self.status = Status.IDLE
@@ -655,6 +668,7 @@ class EngineerManager:
             name=f"engineer-{self.workdir.name}",
         )
         self._thread.start()
+        _log.info("Engineer thread started (tid=%s) for %s", self._thread.ident, self.workdir)
 
     def get_event_history(self) -> list:
         """Return a copy of all events emitted so far (thread-safe)."""
@@ -718,13 +732,70 @@ class EngineerManager:
 
     def shutdown(self) -> None:
         """Signal the loop to stop and wait for the thread to finish."""
+        import traceback
+        _log.info("shutdown() called for %s (thread_alive=%s, status=%s)\n%s",
+                  self.workdir,
+                  self._thread.is_alive() if self._thread else False,
+                  self.status.name,
+                  "".join(traceback.format_stack()))
         self._stop.set()
         self._wake.set()  # unblock if waiting
         if self._thread:
             self._thread.join(timeout=5)
+            if self._thread.is_alive():
+                _log.warning("Engineer thread did NOT exit within 5s for %s", self.workdir)
+            else:
+                _log.info("Engineer thread joined cleanly for %s", self.workdir)
             self._thread = None
         self.status = Status.STOPPED
 
     @property
     def is_running(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
+
+    # ------------------------------------------------------------------
+    # Message persistence
+    # ------------------------------------------------------------------
+
+    def _msg_path(self, base_dir: Path) -> Path:
+        """Return the path for persisting this engineer's messages."""
+        d = base_dir / "_sessions"
+        d.mkdir(parents=True, exist_ok=True)
+        safe_name = self.workdir.name.replace(" ", "_")
+        return d / f"EM_{safe_name}.json"
+
+    def save_messages(self, base_dir: Path) -> None:
+        """Persist current conversation to *base_dir*/_sessions/."""
+        path = self._msg_path(base_dir)
+        if not self._messages:
+            # Remove stale file so cleared conversations stay cleared
+            if path.exists():
+                path.unlink()
+            return
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(self._messages, f, default=str)
+            _log.info("Saved %d messages for %s", len(self._messages), self.workdir.name)
+        except Exception as e:
+            _log.warning("Failed to save messages for %s: %s", self.workdir.name, e)
+
+    def load_messages(self, base_dir: Path) -> None:
+        """Restore conversation from *base_dir*/_sessions/ if available."""
+        path = self._msg_path(base_dir)
+        if not path.exists():
+            return
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                self._messages = json.load(f)
+            _log.info("Restored %d messages for %s", len(self._messages), self.workdir.name)
+        except Exception as e:
+            _log.warning("Failed to load messages for %s: %s", self.workdir.name, e)
+
+    def clear_messages(self) -> None:
+        """Clear conversation history in memory."""
+        self._messages.clear()
+        _log.info("Cleared messages for %s", self.workdir.name)
+
+    def get_messages(self) -> list[dict]:
+        """Return a copy of the current conversation history."""
+        return list(self._messages)

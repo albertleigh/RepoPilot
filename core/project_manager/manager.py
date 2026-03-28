@@ -111,12 +111,14 @@ class ProjectManager:
         repo_registry: RepoRegistry,
         event_bus: EventBus | None = None,
         mcp_server_registry: McpServerRegistry | None = None,
+        base_dir: Path | None = None,
     ) -> None:
         self._llm = llm_client
         self._eng_reg = engineer_registry
         self._repo_reg = repo_registry
         self._event_bus = event_bus
         self._mcp = mcp_server_registry
+        self._base_dir = base_dir or Path(".")
         self.status: PMStatus = PMStatus.IDLE
 
         # -- sub-services --
@@ -755,20 +757,28 @@ class ProjectManager:
     def _agent_loop(self) -> None:
         """Process user messages via the PM tool loop."""
         msgs = self._messages
-        _log.debug("[PM] _agent_loop STARTED")
+        _log.info("[PM] _agent_loop ENTERED (thread=%s)", threading.current_thread().name)
 
         while not self._stop.is_set():
+            _log.debug("[PM] _agent_loop waiting on _wake")
             self._wake.wait()
             if self._stop.is_set():
+                _log.debug("[PM] _agent_loop stop requested, exiting")
                 break
             self._wake.clear()
+            _log.debug("[PM] _agent_loop WOKEN, inbox size ~%d", self._inbox.qsize())
 
+            drain_count = 0
             while not self._stop.is_set():
                 try:
                     user_text = self._inbox.get_nowait()
                 except Empty:
+                    _log.debug("[PM] _agent_loop inbox drained, processed %d messages", drain_count)
                     break
 
+                drain_count += 1
+                _log.debug("[PM] _agent_loop dequeued msg #%d (len=%d): %.80s...",
+                           drain_count, len(user_text), user_text)
                 self.status = PMStatus.RUNNING
                 msgs.append({"role": "user", "content": user_text})
                 self._emit_event(PMStartedEvent())
@@ -776,8 +786,9 @@ class ProjectManager:
                 self._cancel.clear()
                 try:
                     self._run_tool_loop(msgs)
+                    _log.debug("[PM] _run_tool_loop completed normally")
                 except Exception:
-                    _log.exception("PM agent loop error")
+                    _log.exception("[PM] agent loop error")
                     self._emit_event(PMErrorEvent(
                         error="Internal project manager error – see logs.",
                     ))
@@ -785,10 +796,15 @@ class ProjectManager:
                     self._cancel.clear()
                     self.status = PMStatus.IDLE
                     self._emit_event(PMStoppedEvent())
+                    _log.debug("[PM] emitted STOPPED, back to drain")
+
+        _log.info("[PM] _agent_loop EXITED (stop=%s, thread=%s)",
+                  self._stop.is_set(), threading.current_thread().name)
 
     def _run_tool_loop(self, msgs: list) -> None:
         """Inner loop: LLM call → tool dispatch → repeat until end_turn."""
         tool_round = 0
+        _log.info("[PM] _run_tool_loop ENTERED (msg_count=%d)", len(msgs))
         while not self._stop.is_set() and not self._cancel.is_set():
             tool_round += 1
             if tool_round > MAX_TOOL_ROUNDS:
@@ -805,7 +821,7 @@ class ProjectManager:
                     phase="compressing",
                     detail="Compacting conversation history\u2026",
                 ))
-                msgs[:] = auto_compact(msgs, self._llm, Path("."))
+                msgs[:] = auto_compact(msgs, self._llm, self._base_dir, prefix="PM_")
 
             # -- drain background notifications --
             bg_notifs: list[str] = []
@@ -840,15 +856,21 @@ class ProjectManager:
                 if mcp_tools:
                     all_tools = PM_TOOLS + mcp_tools
 
-            response = self._llm.send_with_tools(
-                msgs, all_tools, self._system_prompt(),
-            )
+            try:
+                response = self._llm.send_with_tools(
+                    msgs, all_tools, self._system_prompt(),
+                )
+            except Exception:
+                _log.exception("[PM] LLM send_with_tools failed (round %d)", tool_round)
+                raise
             msgs.append(response.assistant_message)
 
             if response.text:
                 self._emit_event(PMMessageEvent(text=response.text))
 
             if response.stop_reason != "tool_use":
+                _log.info("[PM] _run_tool_loop DONE: stop_reason=%s after %d rounds",
+                          response.stop_reason, tool_round)
                 break
 
             # -- tool dispatch --
@@ -916,11 +938,15 @@ class ProjectManager:
             msgs.extend(self._llm.make_tool_results(results))
 
             if manual_compress:
-                msgs[:] = auto_compact(msgs, self._llm, Path("."))
+                msgs[:] = auto_compact(msgs, self._llm, self._base_dir, prefix="PM_")
 
+        # Log why the loop exited
         if self._cancel.is_set():
+            _log.info("[PM] _run_tool_loop EXITED: cancelled by user after %d rounds", tool_round)
             msgs.append({"role": "assistant", "content": "[Cancelled by user]"})
             self._emit_event(PMMessageEvent(text="\u26d4 Stopped by user."))
+        elif self._stop.is_set():
+            _log.info("[PM] _run_tool_loop EXITED: shutdown requested after %d rounds", tool_round)
 
     # ------------------------------------------------------------------
     # Event helpers
@@ -938,6 +964,7 @@ class ProjectManager:
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
+            _log.debug("[PM] start() called but thread already alive")
             return
         self._stop.clear()
         self.status = PMStatus.IDLE
@@ -946,6 +973,7 @@ class ProjectManager:
             name="project-manager",
         )
         self._thread.start()
+        _log.info("[PM] thread started (tid=%s)", self._thread.ident)
 
     def get_event_history(self) -> list:
         with self._log_lock:
@@ -962,13 +990,65 @@ class ProjectManager:
         self._cancel.set()
 
     def shutdown(self) -> None:
+        _log.info("[PM] shutdown() called (thread_alive=%s)",
+                  self._thread.is_alive() if self._thread else False)
         self._stop.set()
         self._wake.set()
         if self._thread:
             self._thread.join(timeout=5)
+            if self._thread.is_alive():
+                _log.warning("[PM] thread did NOT exit within 5s")
+            else:
+                _log.info("[PM] thread joined cleanly")
             self._thread = None
         self.status = PMStatus.STOPPED
 
     @property
     def is_running(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
+
+    # ------------------------------------------------------------------
+    # Message persistence
+    # ------------------------------------------------------------------
+
+    def _msg_path(self) -> Path:
+        """Return the path for persisting PM messages."""
+        d = self._base_dir / "_sessions"
+        d.mkdir(parents=True, exist_ok=True)
+        return d / "PM.json"
+
+    def save_messages(self) -> None:
+        """Persist current conversation to base_dir/_sessions/."""
+        path = self._msg_path()
+        if not self._messages:
+            # Remove stale file so cleared conversations stay cleared
+            if path.exists():
+                path.unlink()
+            return
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(self._messages, f, default=str)
+            _log.info("Saved %d PM messages", len(self._messages))
+        except Exception as e:
+            _log.warning("Failed to save PM messages: %s", e)
+
+    def load_messages(self) -> None:
+        """Restore conversation from base_dir/_sessions/ if available."""
+        path = self._msg_path()
+        if not path.exists():
+            return
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                self._messages = json.load(f)
+            _log.info("Restored %d PM messages", len(self._messages))
+        except Exception as e:
+            _log.warning("Failed to load PM messages: %s", e)
+
+    def clear_messages(self) -> None:
+        """Clear conversation history in memory."""
+        self._messages.clear()
+        _log.info("Cleared PM messages")
+
+    def get_messages(self) -> list[dict]:
+        """Return a copy of the current conversation history."""
+        return list(self._messages)

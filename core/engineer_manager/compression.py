@@ -7,7 +7,7 @@ full auto-compaction via LLM summarisation.
 from __future__ import annotations
 
 import json
-import time
+from datetime import datetime
 from pathlib import Path
 
 TOKEN_THRESHOLD = 100_000
@@ -37,15 +37,19 @@ def microcompact(messages: list) -> None:
             part["content"] = "[cleared]"
 
 
-def auto_compact(messages: list, llm_client, workdir: Path) -> list:
+def auto_compact(messages: list, llm_client, workdir: Path, prefix: str = "") -> list:
     """Summarise *messages* via the LLM and return a fresh pair.
 
     Saves the full transcript to ``<workdir>/.transcripts/`` before
     compacting.
+
+    *prefix* is prepended to the filename, e.g. ``"PM_"`` or
+    ``"EM_myrepo_"``.
     """
     transcript_dir = workdir / ".transcripts"
     transcript_dir.mkdir(exist_ok=True)
-    path = transcript_dir / f"transcript_{int(time.time())}.jsonl"
+    stamp = datetime.now().strftime("%Y%m%d%H%M%S")
+    path = transcript_dir / f"{prefix}{stamp}.jsonl"
     with open(path, "w", encoding="utf-8") as f:
         for msg in messages:
             f.write(json.dumps(msg, default=str) + "\n")
