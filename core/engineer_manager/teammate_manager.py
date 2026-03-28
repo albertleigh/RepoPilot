@@ -113,6 +113,12 @@ class TeammateManager:
             "claim_task": lambda **kw: self.task_mgr.claim(kw["task_id"], name),
         }
 
+        # If the LLM client supports external tool registration (e.g. SDK),
+        # pass the teammate's handlers so the SDK can invoke them.
+        _register = getattr(self._llm, "register_tool_handlers", None)
+        if callable(_register):
+            _register(dispatch, self._mcp)
+
         # Merge built-in teammate tools with MCP tools (respect provider limit)
         all_tools = TEAMMATE_TOOLS
         if self._mcp:

@@ -803,6 +803,12 @@ class ProjectManager:
 
     def _run_tool_loop(self, msgs: list) -> None:
         """Inner loop: LLM call → tool dispatch → repeat until end_turn."""
+        # If the LLM client supports external tool registration (e.g. SDK),
+        # pass our handlers so the SDK can invoke them.
+        _register = getattr(self._llm, "register_tool_handlers", None)
+        if callable(_register):
+            _register(self._handlers, self._mcp)
+
         tool_round = 0
         _log.info("[PM] _run_tool_loop ENTERED (msg_count=%d)", len(msgs))
         while not self._stop.is_set() and not self._cancel.is_set():

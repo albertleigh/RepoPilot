@@ -204,6 +204,11 @@ class EngineerManager:
             "edit_file":  lambda **kw: run_edit(self.workdir, kw["path"], kw["old_text"], kw["new_text"]),
         }
         sub_msgs: list[dict] = [{"role": "user", "content": prompt}]
+        # If the LLM client supports external tool registration (e.g. SDK),
+        # pass the subagent's handlers so the SDK can invoke them.
+        _register = getattr(self._llm, "register_tool_handlers", None)
+        if callable(_register):
+            _register(sub_handlers, self._mcp)
         for _ in range(1000):
             response = self._llm.send_with_tools(sub_msgs, sub_tools)
             sub_msgs.append(response.assistant_message)
@@ -478,6 +483,12 @@ class EngineerManager:
 
     def _run_tool_loop(self, msgs: list, rounds_without_todo: int) -> None:
         """Inner loop: LLM call → tool dispatch → repeat until end_turn."""
+        # If the LLM client supports external tool registration (e.g. the
+        # Copilot SDK), pass our handlers so the SDK can invoke them.
+        _register = getattr(self._llm, "register_tool_handlers", None)
+        if callable(_register):
+            _register(self._handlers, self._mcp)
+
         tool_round = 0
         _log.info("_run_tool_loop ENTERED for %s (msg_count=%d)", self.workdir, len(msgs))
         while not self._stop.is_set() and not self._cancel.is_set():

@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
+from typing import Any, Callable
 
 from .base import LLMClient, LLMResponse, ToolCall
 
@@ -72,8 +73,9 @@ class CopilotSDKClient(LLMClient):
         },
     ]
 
-    # The SDK handles tools internally; this limit is informational only.
-    MAX_TOOLS = 0
+    # The SDK has its own built-in tools.  We also forward RepoPilot's
+    # custom tools (TodoWrite, MCP tools, etc.) to the SDK session.
+    MAX_TOOLS = 128
 
     # Cached model list (class-level, shared across instances)
     _cached_models: list[str] | None = None
@@ -179,7 +181,30 @@ class CopilotSDKClient(LLMClient):
         self._client = None           # CopilotClient
         self._session = None          # Active session
         self._last_system: str = ""   # System prompt used to create session
+        self._last_tool_names: frozenset[str] = frozenset()
         self._lock = threading.Lock() # Guards lazy init
+
+        # External tool dispatch (set by engineer manager)
+        self._tool_handlers: dict[str, Callable[..., Any]] = {}
+        self._mcp_registry = None     # optional McpServerRegistry
+
+    # ------------------------------------------------------------------ #
+    #  External tool registration                                         #
+    # ------------------------------------------------------------------ #
+
+    def register_tool_handlers(
+        self,
+        handlers: dict[str, Callable[..., Any]],
+        mcp_registry=None,
+    ) -> None:
+        """Register RepoPilot tool handlers so the SDK can invoke them.
+
+        Called by the engineer manager before entering its tool loop.
+        *handlers* maps tool name → callable(**kwargs) → str.
+        *mcp_registry* is the optional ``McpServerRegistry`` for MCP tools.
+        """
+        self._tool_handlers = handlers
+        self._mcp_registry = mcp_registry
 
     # ------------------------------------------------------------------ #
     #  Async ↔ sync bridge                                                #
@@ -229,12 +254,20 @@ class CopilotSDKClient(LLMClient):
         self._client = CopilotClient(config)
         await self._client.start()
 
-    async def _ensure_session(self, system: str = ""):
+    async def _ensure_session(
+        self,
+        system: str = "",
+        sdk_tools: list | None = None,
+    ):
         await self._ensure_client()
 
+        tool_names = frozenset(
+            t.name if hasattr(t, "name") else "" for t in (sdk_tools or [])
+        )
         need_new = (
             self._session is None
             or (system and system != self._last_system)
+            or tool_names != self._last_tool_names
         )
         if not need_new:
             return self._session
@@ -255,14 +288,87 @@ class CopilotSDKClient(LLMClient):
         }
         if system:
             kw["system_message"] = {"content": system}
+        if sdk_tools:
+            kw["tools"] = sdk_tools
 
         self._session = await self._client.create_session(**kw)
         self._last_system = system
+        self._last_tool_names = tool_names
         return self._session
 
-    async def _send_and_collect(self, message: str, system: str = "") -> str:
+    def _build_sdk_tools(self, tool_defs: list[dict]) -> list:
+        """Convert RepoPilot tool definitions to SDK ``Tool`` objects.
+
+        Skips tools that overlap with the SDK's built-in tools (the CLI
+        already has its own file-editing and shell tools).  For each
+        remaining tool, wraps the registered handler so the SDK can
+        invoke it during its agent loop.
+        """
+        from copilot.tools import Tool, ToolInvocation, ToolResult
+
+        # The SDK already provides these via the CLI — don't duplicate.
+        SDK_BUILTIN = frozenset({
+            "bash", "read_file", "write_file", "edit_file",
+        })
+
+        sdk_tools: list[Tool] = []
+        for tdef in tool_defs:
+            name = tdef.get("name", "")
+            if name in SDK_BUILTIN:
+                continue
+
+            handler_fn = self._tool_handlers.get(name)
+            is_mcp = (
+                self._mcp_registry is not None
+                and self._mcp_registry.is_mcp_tool(name)
+            )
+            if not handler_fn and not is_mcp:
+                continue
+
+            # Translate Anthropic schema → SDK parameters
+            schema = tdef.get("input_schema", {})
+
+            # Capture name/handler in closure
+            def _make_handler(
+                tool_name: str,
+                h: Callable[..., Any] | None,
+                mcp: bool,
+            ):
+                def _handler(invocation: ToolInvocation) -> ToolResult:
+                    args = invocation.arguments or {}
+                    try:
+                        if mcp and self._mcp_registry:
+                            out = self._mcp_registry.call_mcp_tool(
+                                tool_name, args,
+                            )
+                        elif h:
+                            out = h(**args)
+                        else:
+                            out = f"No handler for {tool_name}"
+                    except Exception as exc:
+                        out = f"Error: {exc}"
+                    return ToolResult(
+                        text_result_for_llm=str(out),
+                        result_type="success",
+                    )
+                return _handler
+
+            sdk_tools.append(Tool(
+                name=name,
+                description=tdef.get("description", ""),
+                parameters=schema,
+                handler=_make_handler(name, handler_fn, is_mcp),
+            ))
+        return sdk_tools
+
+    async def _send_and_collect(
+        self,
+        message: str,
+        system: str = "",
+        sdk_tools: list | None = None,
+    ) -> str:
         """Send *message*, wait for the agent to go idle, return text."""
-        session = await self._ensure_session(system)
+        session = await self._ensure_session(system, sdk_tools=sdk_tools)
         done = asyncio.Event()
         collected: list[str] = []
 
@@ -348,9 +454,11 @@ class CopilotSDKClient(LLMClient):
         """Send via the Copilot SDK agent loop.
 
         The SDK manages tool calling internally through the Copilot CLI's
-        built-in tools (file editing, shell, reading, etc.).  We pass the
-        latest user message, wait for the agent to finish all rounds, and
-        return the final assistant text with ``stop_reason="end_turn"``.
+        built-in tools (file editing, shell, reading, etc.) **plus** any
+        custom RepoPilot tools registered via ``register_tool_handlers``.
+        We pass the latest user message, wait for the agent to finish all
+        rounds, and return the final assistant text with
+        ``stop_reason="end_turn"``.
         """
         last_user = self._extract_last_user_message(messages)
         if not last_user:
@@ -361,7 +469,10 @@ class CopilotSDKClient(LLMClient):
                 assistant_message={"role": "assistant", "content": ""},
             )
 
-        text = self._run(self._send_and_collect(last_user, system=system))
+        sdk_tools = self._build_sdk_tools(tools) if tools else None
+        text = self._run(
+            self._send_and_collect(last_user, system=system, sdk_tools=sdk_tools)
+        )
         return LLMResponse(
             text=text,
             tool_calls=[],
