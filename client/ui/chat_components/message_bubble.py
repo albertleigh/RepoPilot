@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
     QFrame, QVBoxLayout, QHBoxLayout, QLabel, QSizePolicy, QMenu, QApplication,
 )
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QColor, QTextDocument
 
 from .markdown_renderer import render_markdown
 
@@ -136,12 +136,18 @@ class MessageBubble(QFrame):
             if selected:
                 QApplication.clipboard().setText(selected)
             else:
-                QApplication.clipboard().setText(label.text())
+                QApplication.clipboard().setText(self._html_to_plain(label.text()))
         elif chosen == select_all_act:
             label.setSelection(0, len(label.text()))
         elif chosen == copy_all_act:
             label.setSelection(0, len(label.text()))
-            QApplication.clipboard().setText(label.text())
+            QApplication.clipboard().setText(self._html_to_plain(label.text()))
+
+    @staticmethod
+    def _html_to_plain(html: str) -> str:
+        doc = QTextDocument()
+        doc.setHtml(html)
+        return doc.toPlainText()
 
     # ------------------------------------------------------------------
     # Palette-derived styling
