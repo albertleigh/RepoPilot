@@ -61,10 +61,26 @@ class LLMClient(ABC):
     RETRY_MAX_ATTEMPTS: int = 3
     RETRY_WAIT_SECONDS: int = 60
 
+    # Exception types considered transient connection failures.
+    _TRANSIENT_EXC_NAMES = frozenset({
+        "APIConnectionError", "ConnectError", "ConnectTimeout",
+    })
+
+    def _is_transient(self, exc: Exception) -> bool:
+        """Return True if *exc* is a transient error worth retrying."""
+        status = getattr(exc, "status_code", None)
+        if status in (429, 529):
+            return True
+        # Connection-level errors (DNS failure, timeout, reset, etc.)
+        if type(exc).__name__ in self._TRANSIENT_EXC_NAMES:
+            return True
+        return False
+
     def _call_with_retry(self, func, *args, **kwargs):
         """Call *func* with automatic retry on transient errors.
 
-        Retries on HTTP 429 (rate-limit) and 529 (overloaded) up to
+        Retries on HTTP 429 (rate-limit), 529 (overloaded), and
+        connection errors (DNS failures, timeouts) up to
         ``RETRY_MAX_ATTEMPTS`` times, waiting ``RETRY_WAIT_SECONDS``
         between each attempt.  Raises the original exception if all
         attempts are exhausted.
@@ -74,12 +90,11 @@ class LLMClient(ABC):
             try:
                 return func(*args, **kwargs)
             except Exception as exc:
-                status = getattr(exc, "status_code", None)
-                if status in (429, 529) and attempt < self.RETRY_MAX_ATTEMPTS:
+                if self._is_transient(exc) and attempt < self.RETRY_MAX_ATTEMPTS:
                     _log.warning(
                         "Transient API error %s (attempt %d/%d). "
                         "Retrying in %ds…",
-                        status,
+                        type(exc).__name__,
                         attempt,
                         self.RETRY_MAX_ATTEMPTS,
                         self.RETRY_WAIT_SECONDS,
