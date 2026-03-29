@@ -465,12 +465,7 @@ class EngineerManager:
                 try:
                     self._run_tool_loop(msgs, rounds_without_todo)
                     _log.debug("[DIAG] _run_tool_loop completed normally for %s", self.workdir)
-                except TimeoutError:
-                    _log.exception("Agent loop timed out in %s", self.workdir)
-                    self._emit_event(EngineerErrorEvent(
-                        workdir=str(self.workdir),
-                        error="LLM request timed out. The model may be overloaded – try again.",
-                    ))
+
                 except Exception:
                     _log.exception("Agent loop error in %s", self.workdir)
                     self._emit_event(EngineerErrorEvent(

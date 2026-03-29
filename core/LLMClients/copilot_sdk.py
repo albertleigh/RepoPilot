@@ -244,13 +244,26 @@ class CopilotSDKClient(LLMClient):
         )
         ctx.loop_thread.start()
 
-    def _run(self, coro, *, timeout: float = 900):
-        """Submit an async coroutine and block the calling thread."""
+    def _run(self, coro, *, timeout: float | None = None):
+        """Submit an async coroutine and block the calling thread.
+
+        If *timeout* is ``None`` (default), waits indefinitely — the
+        coroutine is expected to manage its own internal timeouts via
+        ``asyncio.wait_for``.  If a finite timeout is given and expires,
+        the future is **cancelled** so no zombie coroutine is left
+        behind, and the empty-string fallback is returned instead of
+        raising ``TimeoutError``.
+        """
         ctx = self._get_caller_ctx()
         self._ensure_loop(ctx)
         assert ctx.loop is not None
         fut = asyncio.run_coroutine_threadsafe(coro, ctx.loop)
-        return fut.result(timeout=timeout)
+        try:
+            return fut.result(timeout=timeout)
+        except TimeoutError:
+            fut.cancel()
+            _log.error("[SDK] _run: outer timeout fired (%s s), future cancelled", timeout)
+            return ""
 
     # ------------------------------------------------------------------ #
     #  SDK lifecycle                                                      #
@@ -426,95 +439,130 @@ class CopilotSDKClient(LLMClient):
         system: str = "",
         sdk_tools: list | None = None,
         timeout: float = 900,
+        max_retries: int = 2,
     ) -> str:
-        """Send *message*, wait for the agent to go idle, return text."""
-        _log.info(
-            "[SDK] _send_and_collect: msg_len=%d, msg_preview=%.120s",
-            len(message), message,
-        )
-        session = await asyncio.wait_for(
-            self._ensure_session(
-                caller_ctx, system, sdk_tools=sdk_tools,
-            ),
-            timeout=60,
-        )
-        done = asyncio.Event()
-        collected: list[str] = []
-        event_count = 0
+        """Send *message*, wait for the agent to go idle, return text.
 
-        def _on_event(event):
-            nonlocal event_count
-            event_count += 1
-            etype = event.type.value
-            data = event.data
-
-            # Log every event at INFO for diagnostics
-            data_summary = ""
-            if hasattr(data, "content") and data.content:
-                data_summary = f", content_len={len(data.content)}"
-            elif hasattr(data, "delta") and data.delta:
-                data_summary = f", delta_len={len(data.delta)}"
-            elif hasattr(data, "message") and data.message:
-                data_summary = f", message={str(data.message)[:200]}"
+        On timeout, tears down the stale session and retries up to
+        *max_retries* times with a fresh session before giving up.
+        """
+        for attempt in range(1, max_retries + 1):
             _log.info(
-                "[SDK] event #%d: type=%s%s",
-                event_count, etype, data_summary,
+                "[SDK] _send_and_collect attempt %d/%d: msg_len=%d, "
+                "msg_preview=%.120s",
+                attempt, max_retries, len(message), message,
             )
-
-            if etype == "assistant.message":
-                content = getattr(data, "content", None)
-                if content:
-                    collected.append(content)
-            elif etype == "assistant.message_delta":
-                delta = getattr(data, "delta", None) or getattr(data, "content", None)
-                if delta:
-                    collected.append(delta)
-            elif etype == "session.idle":
-                _log.info(
-                    "[SDK] session.idle received after %d events, "
-                    "collected %d message(s), total_len=%d",
-                    event_count, len(collected),
-                    sum(len(c) for c in collected),
-                )
-                done.set()
-            elif etype == "session.error":
-                err_msg = getattr(data, "message", None) or str(data)
-                _log.error("[SDK] session.error: %s", err_msg)
-                done.set()
-
-        unsub = session.on(_on_event)
-        timed_out = False
-        try:
-            _log.debug("[SDK] Sending message to session...")
-            await asyncio.wait_for(session.send(message), timeout=60)
-            _log.debug("[SDK] session.send() returned, waiting for idle...")
-            await asyncio.wait_for(done.wait(), timeout=timeout)
-        except asyncio.TimeoutError:
-            timed_out = True
-            _log.error("[SDK] Timed out (session.send or waiting for idle)")
-        except Exception:
-            _log.exception("[SDK] Error in _send_and_collect")
-        finally:
-            if callable(unsub):
-                unsub()
-
-        # If the session timed out, tear it down so the next call
-        # creates a fresh one instead of reusing a dead session.
-        if timed_out:
-            _log.warning("[SDK] Destroying stale session after timeout")
             try:
-                await caller_ctx.session.disconnect()
-            except Exception:
-                _log.debug("session disconnect error (ignored)", exc_info=True)
-            caller_ctx.session = None
+                session = await asyncio.wait_for(
+                    self._ensure_session(
+                        caller_ctx, system, sdk_tools=sdk_tools,
+                    ),
+                    timeout=60,
+                )
+            except asyncio.TimeoutError:
+                _log.error(
+                    "[SDK] _ensure_session timed out (attempt %d/%d)",
+                    attempt, max_retries,
+                )
+                await self._destroy_session(caller_ctx)
+                if attempt < max_retries:
+                    _log.info("[SDK] Will retry after session setup timeout")
+                    continue
+                return ""
 
-        result = "\n".join(collected) if collected else ""
-        _log.info(
-            "[SDK] _send_and_collect done: events=%d, collected=%d, "
-            "result_len=%d",
-            event_count, len(collected), len(result),
-        )
-        return result
+            done = asyncio.Event()
+            collected: list[str] = []
+            event_count = 0
+
+            def _on_event(event):
+                nonlocal event_count
+                event_count += 1
+                etype = event.type.value
+                data = event.data
+
+                data_summary = ""
+                if hasattr(data, "content") and data.content:
+                    data_summary = f", content_len={len(data.content)}"
+                elif hasattr(data, "delta") and data.delta:
+                    data_summary = f", delta_len={len(data.delta)}"
+                elif hasattr(data, "message") and data.message:
+                    data_summary = f", message={str(data.message)[:200]}"
+                _log.info(
+                    "[SDK] event #%d: type=%s%s",
+                    event_count, etype, data_summary,
+                )
+
+                if etype == "assistant.message":
+                    content = getattr(data, "content", None)
+                    if content:
+                        collected.append(content)
+                elif etype == "assistant.message_delta":
+                    delta = getattr(data, "delta", None) or getattr(data, "content", None)
+                    if delta:
+                        collected.append(delta)
+                elif etype == "session.idle":
+                    _log.info(
+                        "[SDK] session.idle received after %d events, "
+                        "collected %d message(s), total_len=%d",
+                        event_count, len(collected),
+                        sum(len(c) for c in collected),
+                    )
+                    done.set()
+                elif etype == "session.error":
+                    err_msg = getattr(data, "message", None) or str(data)
+                    _log.error("[SDK] session.error: %s", err_msg)
+                    done.set()
+
+            unsub = session.on(_on_event)
+            timed_out = False
+            try:
+                _log.debug("[SDK] Sending message to session...")
+                await asyncio.wait_for(session.send(message), timeout=60)
+                _log.debug("[SDK] session.send() returned, waiting for idle...")
+                await asyncio.wait_for(done.wait(), timeout=timeout)
+            except asyncio.TimeoutError:
+                timed_out = True
+                _log.error(
+                    "[SDK] Timed out (attempt %d/%d)", attempt, max_retries,
+                )
+            except Exception:
+                _log.exception("[SDK] Error in _send_and_collect")
+            finally:
+                if callable(unsub):
+                    unsub()
+
+            if timed_out:
+                await self._destroy_session(caller_ctx)
+                if attempt < max_retries:
+                    _log.info("[SDK] Will retry with a fresh session")
+                    continue
+                # Final attempt also timed out — return whatever we got
+                _log.warning(
+                    "[SDK] All %d attempts timed out, returning partial "
+                    "result (%d chars)",
+                    max_retries, sum(len(c) for c in collected),
+                )
+
+            result = "\n".join(collected) if collected else ""
+            _log.info(
+                "[SDK] _send_and_collect done: attempt=%d, events=%d, "
+                "collected=%d, result_len=%d",
+                attempt, event_count, len(collected), len(result),
+            )
+            return result
+
+        # Should never reach here, but just in case
+        return ""
+
+    async def _destroy_session(self, caller_ctx: _CallerContext) -> None:
+        """Tear down a stale session so the next call creates a fresh one."""
+        _log.warning("[SDK] Destroying stale session")
+        try:
+            if caller_ctx.session:
+                await caller_ctx.session.disconnect()
+        except Exception:
+            _log.debug("session disconnect error (ignored)", exc_info=True)
+        caller_ctx.session = None
 
     async def _cleanup_ctx(self, ctx: _CallerContext) -> None:
         """Disconnect session and stop client for a single caller."""

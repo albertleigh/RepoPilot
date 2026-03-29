@@ -787,11 +787,6 @@ class ProjectManager:
                 try:
                     self._run_tool_loop(msgs)
                     _log.debug("[PM] _run_tool_loop completed normally")
-                except TimeoutError:
-                    _log.exception("[PM] agent loop timed out")
-                    self._emit_event(PMErrorEvent(
-                        error="LLM request timed out. The model may be overloaded – try again.",
-                    ))
                 except Exception:
                     _log.exception("[PM] agent loop error")
                     self._emit_event(PMErrorEvent(
