@@ -244,7 +244,7 @@ class CopilotSDKClient(LLMClient):
         )
         ctx.loop_thread.start()
 
-    def _run(self, coro, *, timeout: float = 300):
+    def _run(self, coro, *, timeout: float = 900):
         """Submit an async coroutine and block the calling thread."""
         ctx = self._get_caller_ctx()
         self._ensure_loop(ctx)
@@ -425,14 +425,18 @@ class CopilotSDKClient(LLMClient):
         caller_ctx: _CallerContext,
         system: str = "",
         sdk_tools: list | None = None,
+        timeout: float = 900,
     ) -> str:
         """Send *message*, wait for the agent to go idle, return text."""
         _log.info(
             "[SDK] _send_and_collect: msg_len=%d, msg_preview=%.120s",
             len(message), message,
         )
-        session = await self._ensure_session(
-            caller_ctx, system, sdk_tools=sdk_tools,
+        session = await asyncio.wait_for(
+            self._ensure_session(
+                caller_ctx, system, sdk_tools=sdk_tools,
+            ),
+            timeout=60,
         )
         done = asyncio.Event()
         collected: list[str] = []
@@ -479,18 +483,30 @@ class CopilotSDKClient(LLMClient):
                 done.set()
 
         unsub = session.on(_on_event)
+        timed_out = False
         try:
             _log.debug("[SDK] Sending message to session...")
-            await session.send(message)
+            await asyncio.wait_for(session.send(message), timeout=60)
             _log.debug("[SDK] session.send() returned, waiting for idle...")
-            await asyncio.wait_for(done.wait(), timeout=300)
+            await asyncio.wait_for(done.wait(), timeout=timeout)
         except asyncio.TimeoutError:
-            _log.error("[SDK] Timed out waiting for session.idle")
+            timed_out = True
+            _log.error("[SDK] Timed out (session.send or waiting for idle)")
         except Exception:
             _log.exception("[SDK] Error in _send_and_collect")
         finally:
             if callable(unsub):
                 unsub()
+
+        # If the session timed out, tear it down so the next call
+        # creates a fresh one instead of reusing a dead session.
+        if timed_out:
+            _log.warning("[SDK] Destroying stale session after timeout")
+            try:
+                await caller_ctx.session.disconnect()
+            except Exception:
+                _log.debug("session disconnect error (ignored)", exc_info=True)
+            caller_ctx.session = None
 
         result = "\n".join(collected) if collected else ""
         _log.info(
