@@ -547,12 +547,19 @@ class EngineerManager:
                     all_tools = TOOLS + mcp_tools
 
             try:
+                self._llm.progress_callback = lambda detail: self._emit_event(
+                    EngineerProgressEvent(
+                        workdir=str(self.workdir), phase="sdk", detail=detail,
+                    ),
+                )
                 response = self._llm.send_with_tools(
                     msgs, all_tools, self._system_prompt(),
                 )
             except Exception:
                 _log.exception("LLM send_with_tools failed (round %d) for %s", tool_round, self.workdir)
                 raise
+            finally:
+                self._llm.progress_callback = None
             _log.debug("[DIAG] LLM responded: stop_reason=%s, has_text=%s, num_tool_calls=%d for %s",
                        response.stop_reason, bool(response.text), len(response.tool_calls or []), self.workdir)
             msgs.append(response.assistant_message)

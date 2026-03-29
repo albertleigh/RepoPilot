@@ -863,12 +863,17 @@ class ProjectManager:
                     all_tools = PM_TOOLS + mcp_tools
 
             try:
+                self._llm.progress_callback = lambda detail: self._emit_event(
+                    PMProgressEvent(phase="sdk", detail=detail),
+                )
                 response = self._llm.send_with_tools(
                     msgs, all_tools, self._system_prompt(),
                 )
             except Exception:
                 _log.exception("[PM] LLM send_with_tools failed (round %d)", tool_round)
                 raise
+            finally:
+                self._llm.progress_callback = None
             msgs.append(response.assistant_message)
 
             if response.text:

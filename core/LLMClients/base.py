@@ -9,7 +9,7 @@ import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 
 @dataclass
@@ -68,6 +68,11 @@ class LLMClient(ABC):
     FIELDS: list[dict] = []
     RETRY_MAX_ATTEMPTS: int = 3
     RETRY_WAIT_SECONDS: int = 60
+
+    # Optional callback for streaming progress updates during long
+    # operations (e.g. SDK agent loops).  Set by the caller (manager)
+    # before invoking send_with_tools.  Signature: (detail: str) -> None
+    progress_callback: Callable[[str], None] | None = None
 
     @classmethod
     def on_field_action(cls, key: str) -> dict:

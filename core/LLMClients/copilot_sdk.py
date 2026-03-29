@@ -58,6 +58,60 @@ KNOWN_MODELS = [
 DEFAULT_MODEL = "claude-sonnet-4.6"
 
 
+def _extract_detail(data: Any) -> str:
+    """Best-effort extraction of a descriptive string from SDK event data."""
+    # Try common attribute names for tool/command identification
+    for attr in ("tool_name", "name", "tool", "command"):
+        val = getattr(data, attr, None)
+        if val and isinstance(val, str):
+            return val
+    # Some events carry an arguments/input dict with a "command" key
+    for attr in ("arguments", "input", "parameters"):
+        d = getattr(data, attr, None)
+        if isinstance(d, dict):
+            for k in ("command", "path", "file", "url"):
+                if k in d and d[k]:
+                    return f"{k}={str(d[k])[:80]}"
+    return ""
+
+
+def _sdk_event_to_progress(etype: str, data: Any) -> str | None:
+    """Convert an SDK event type to a short human-readable progress string.
+
+    Returns ``None`` for events that don't warrant a UI update.
+    """
+    detail = _extract_detail(data)
+
+    if etype == "tool.execution_start":
+        return f"Running tool: {detail}" if detail else "Running tool…"
+    if etype == "tool.execution_complete":
+        return f"Tool done: {detail}" if detail else "Tool completed"
+    if etype == "tool.execution_partial_result":
+        return f"Tool output: {detail}…" if detail else "Receiving tool output…"
+    if etype == "assistant.turn_start":
+        return "Thinking…"
+    if etype == "assistant.turn_end":
+        return "Processing response…"
+    if etype == "assistant.message":
+        content = getattr(data, "content", None)
+        if content and isinstance(content, str):
+            preview = content[:80].replace("\n", " ")
+            return f"Writing: {preview}…"
+        return None
+    if etype == "subagent.completed":
+        return f"Sub-agent done: {detail}" if detail else "Sub-agent completed"
+    if etype == "permission.requested":
+        return f"Permission: {detail}" if detail else "Permission requested…"
+    if etype == "permission.completed":
+        return f"Permission granted: {detail}" if detail else "Permission granted"
+    if etype == "session.error":
+        msg = getattr(data, "message", None) or str(data)
+        return f"Error: {msg[:120]}"
+    if etype == "system.notification":
+        content = getattr(data, "content", None) or getattr(data, "message", None) or ""
+        if content:
+            return f"Notice: {str(content)[:100]}"
+    return None
 class CopilotSDKClient(LLMClient):
     """LLM provider backed by the GitHub Copilot SDK."""
 
@@ -473,6 +527,7 @@ class CopilotSDKClient(LLMClient):
             done = asyncio.Event()
             collected: list[str] = []
             event_count = 0
+            progress_cb = self.progress_callback
 
             def _on_event(event):
                 nonlocal event_count
@@ -487,10 +542,30 @@ class CopilotSDKClient(LLMClient):
                     data_summary = f", delta_len={len(data.delta)}"
                 elif hasattr(data, "message") and data.message:
                     data_summary = f", message={str(data.message)[:200]}"
+                # Log public attributes for discovery (only at DEBUG)
+                if _log.isEnabledFor(logging.DEBUG):
+                    attrs = {
+                        k: repr(getattr(data, k, None))[:120]
+                        for k in dir(data)
+                        if not k.startswith("_")
+                    }
+                    _log.debug(
+                        "[SDK] event #%d: type=%s, attrs=%s",
+                        event_count, etype, attrs,
+                    )
                 _log.info(
                     "[SDK] event #%d: type=%s%s",
                     event_count, etype, data_summary,
                 )
+
+                # Emit progress to the UI via the manager's callback
+                if progress_cb is not None:
+                    detail = _sdk_event_to_progress(etype, data)
+                    if detail:
+                        try:
+                            progress_cb(detail)
+                        except Exception:
+                            pass
 
                 if etype == "assistant.message":
                     content = getattr(data, "content", None)
