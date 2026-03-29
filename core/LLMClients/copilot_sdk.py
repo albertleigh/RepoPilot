@@ -590,6 +590,7 @@ class CopilotSDKClient(LLMClient):
 
             unsub = session.on(_on_event)
             timed_out = False
+            send_failed = False
             try:
                 _log.debug("[SDK] Sending message to session...")
                 await asyncio.wait_for(session.send(message), timeout=60)
@@ -601,19 +602,23 @@ class CopilotSDKClient(LLMClient):
                     "[SDK] Timed out (attempt %d/%d)", attempt, max_retries,
                 )
             except Exception:
-                _log.exception("[SDK] Error in _send_and_collect")
+                send_failed = True
+                _log.exception(
+                    "[SDK] session.send failed (attempt %d/%d)",
+                    attempt, max_retries,
+                )
             finally:
                 if callable(unsub):
                     unsub()
 
-            if timed_out:
+            if timed_out or send_failed:
                 await self._destroy_session(caller_ctx)
                 if attempt < max_retries:
                     _log.info("[SDK] Will retry with a fresh session")
                     continue
                 # Final attempt also timed out — return whatever we got
                 _log.warning(
-                    "[SDK] All %d attempts timed out, returning partial "
+                    "[SDK] All %d attempts failed, returning partial "
                     "result (%d chars)",
                     max_retries, sum(len(c) for c in collected),
                 )
