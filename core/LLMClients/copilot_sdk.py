@@ -307,17 +307,41 @@ class CopilotSDKClient(LLMClient):
         the future is **cancelled** so no zombie coroutine is left
         behind, and the empty-string fallback is returned instead of
         raising ``TimeoutError``.
+
+        Polls every 0.5 s so that ``cancel_event`` (set by the
+        engineer manager) is detected promptly.
         """
+        import time as _time
+
         ctx = self._get_caller_ctx()
         self._ensure_loop(ctx)
         assert ctx.loop is not None
         fut = asyncio.run_coroutine_threadsafe(coro, ctx.loop)
-        try:
-            return fut.result(timeout=timeout)
-        except TimeoutError:
-            fut.cancel()
-            _log.error("[SDK] _run: outer timeout fired (%s s), future cancelled", timeout)
-            return ""
+        cancel_ev = self.cancel_event
+        deadline = (_time.monotonic() + timeout) if timeout else None
+        poll_interval = 0.5
+
+        while True:
+            try:
+                return fut.result(timeout=poll_interval)
+            except TimeoutError:
+                pass
+
+            # Check caller-requested cancellation
+            if cancel_ev is not None and cancel_ev.is_set():
+                fut.cancel()
+                _log.info("[SDK] _run: cancelled by user, future cancelled")
+                # Tear down the session so the SDK stops its agent loop
+                asyncio.run_coroutine_threadsafe(
+                    self._destroy_session(ctx), ctx.loop,
+                )
+                return ""
+
+            # Check overall timeout
+            if deadline is not None and _time.monotonic() > deadline:
+                fut.cancel()
+                _log.error("[SDK] _run: outer timeout fired (%s s), future cancelled", timeout)
+                return ""
 
     # ------------------------------------------------------------------ #
     #  SDK lifecycle                                                      #
@@ -325,8 +349,17 @@ class CopilotSDKClient(LLMClient):
 
     async def _ensure_client(self, caller_ctx: _CallerContext):
         if caller_ctx.client is not None:
-            _log.debug("[SDK] _ensure_client: reusing existing client (tid=%d)", threading.get_ident())
-            return
+            # Check if the subprocess is still alive
+            proc = getattr(caller_ctx.client, "_process", None)
+            if proc is not None and proc.poll() is not None:
+                _log.warning(
+                    "[SDK] CLI subprocess died (rc=%s), recreating client",
+                    proc.returncode,
+                )
+                await self._destroy_client(caller_ctx)
+            else:
+                _log.debug("[SDK] _ensure_client: reusing existing client (tid=%d)", threading.get_ident())
+                return
         _log.info("[SDK] _ensure_client: creating new CopilotClient (tid=%d)", threading.get_ident())
         try:
             from copilot import CopilotClient, SubprocessConfig
@@ -523,6 +556,16 @@ class CopilotSDKClient(LLMClient):
                     _log.info("[SDK] Will retry after session setup timeout")
                     continue
                 return ""
+            except OSError as exc:
+                _log.error(
+                    "[SDK] _ensure_session OSError (attempt %d/%d): %s",
+                    attempt, max_retries, exc,
+                )
+                await self._destroy_client(caller_ctx)
+                if attempt < max_retries:
+                    _log.info("[SDK] Will retry after subprocess error")
+                    continue
+                return ""
 
             done = asyncio.Event()
             collected: list[str] = []
@@ -591,11 +634,18 @@ class CopilotSDKClient(LLMClient):
             unsub = session.on(_on_event)
             timed_out = False
             send_failed = False
+            cancelled = False
             try:
                 _log.debug("[SDK] Sending message to session...")
                 await asyncio.wait_for(session.send(message), timeout=60)
                 _log.debug("[SDK] session.send() returned, waiting for idle...")
                 await asyncio.wait_for(done.wait(), timeout=timeout)
+            except asyncio.CancelledError:
+                cancelled = True
+                _log.info(
+                    "[SDK] Cancelled by user (attempt %d/%d)",
+                    attempt, max_retries,
+                )
             except asyncio.TimeoutError:
                 timed_out = True
                 _log.error(
@@ -610,6 +660,10 @@ class CopilotSDKClient(LLMClient):
             finally:
                 if callable(unsub):
                     unsub()
+
+            if cancelled:
+                await self._destroy_session(caller_ctx)
+                return "\n".join(collected) if collected else ""
 
             if timed_out or send_failed:
                 await self._destroy_session(caller_ctx)
@@ -643,6 +697,17 @@ class CopilotSDKClient(LLMClient):
         except Exception:
             _log.debug("session disconnect error (ignored)", exc_info=True)
         caller_ctx.session = None
+
+    async def _destroy_client(self, caller_ctx: _CallerContext) -> None:
+        """Tear down the session *and* client so the next call recreates both."""
+        _log.warning("[SDK] Destroying client (subprocess)")
+        await self._destroy_session(caller_ctx)
+        try:
+            if caller_ctx.client:
+                await caller_ctx.client.stop()
+        except Exception:
+            _log.debug("client stop error (ignored)", exc_info=True)
+        caller_ctx.client = None
 
     async def _cleanup_ctx(self, ctx: _CallerContext) -> None:
         """Disconnect session and stop client for a single caller."""

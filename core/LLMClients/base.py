@@ -74,6 +74,11 @@ class LLMClient(ABC):
     # before invoking send_with_tools.  Signature: (detail: str) -> None
     progress_callback: Callable[[str], None] | None = None
 
+    # Optional threading.Event set by the caller to request cancellation
+    # of the current blocking LLM call.  Providers that support mid-call
+    # cancellation (e.g. Copilot SDK) should poll this periodically.
+    cancel_event: Any = None
+
     @classmethod
     def on_field_action(cls, key: str) -> dict:
         """Handle a FIELDS entry of ``"type": "action"``.

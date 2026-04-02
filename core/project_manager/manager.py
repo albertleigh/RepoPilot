@@ -809,6 +809,10 @@ class ProjectManager:
         if callable(_register):
             _register(self._handlers, self._mcp)
 
+        # Let the LLM client observe our cancel flag so it can abort
+        # long-running blocking calls (e.g. SDK agent loops) promptly.
+        self._llm.cancel_event = self._cancel
+
         tool_round = 0
         _log.info("[PM] _run_tool_loop ENTERED (msg_count=%d)", len(msgs))
         while not self._stop.is_set() and not self._cancel.is_set():
