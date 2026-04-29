@@ -14,9 +14,10 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtWidgets import (
-    QHBoxLayout, QPushButton, QSizePolicy, QVBoxLayout, QWidget,
+    QCheckBox, QHBoxLayout, QLabel, QLineEdit, QPushButton, QSizePolicy,
+    QSpinBox, QVBoxLayout, QWidget,
 )
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 
 from .base_tab import BaseTab
 from client.ui.chat_components import ChatDisplay, ChatInputBar
@@ -30,6 +31,9 @@ class BaseChatTab(BaseTab):
     stop_requested = Signal()  # emitted when the user clicks stop
     chat_cleared = Signal()    # emitted when the user clicks clear
 
+    # Subclasses set True to show the auto-prompt timer row.
+    show_auto_prompt: bool = False
+
     def __init__(
         self,
         parent: QWidget | None = None,
@@ -39,6 +43,7 @@ class BaseChatTab(BaseTab):
     ) -> None:
         super().__init__(parent)
         self._history = ChatHistory(session_id=session_id, base_dir=base_dir)
+        self._agent_running = False
         self._init_chat_layout()
 
     # ------------------------------------------------------------------
@@ -86,6 +91,52 @@ class BaseChatTab(BaseTab):
         stop_layout.addStretch()
         root.addWidget(self._stop_row)
 
+        # Auto-prompt timer row (hidden unless subclass opts in)
+        self._auto_prompt_row = QWidget()
+        self._auto_prompt_row.setVisible(self.show_auto_prompt)
+        ap_layout = QHBoxLayout(self._auto_prompt_row)
+        ap_layout.setContentsMargins(12, 4, 12, 4)
+        ap_layout.setSpacing(6)
+        self._auto_prompt_cb = QCheckBox("Auto-prompt")
+        self._auto_prompt_cb.setToolTip(
+            "When enabled, automatically sends the prompt below\n"
+            "whenever the agent becomes idle."
+        )
+        self._auto_prompt_cb.toggled.connect(self._on_auto_prompt_toggled)
+        ap_layout.addWidget(self._auto_prompt_cb)
+        self._auto_prompt_input = QLineEdit(
+            "Are there any pending tasks? Maybe we should continue."
+        )
+        self._auto_prompt_input.setPlaceholderText(
+            "Auto-prompt text\u2026"
+        )
+        self._auto_prompt_input.setEnabled(False)
+        self._auto_prompt_input.setSizePolicy(
+            QSizePolicy.Expanding, QSizePolicy.Fixed,
+        )
+        ap_layout.addWidget(self._auto_prompt_input, stretch=1)
+
+        # Interval spinbox
+        interval_label = QLabel("every")
+        interval_label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        ap_layout.addWidget(interval_label)
+        self._auto_prompt_interval = QSpinBox()
+        self._auto_prompt_interval.setRange(5, 600)
+        self._auto_prompt_interval.setValue(10)
+        self._auto_prompt_interval.setSuffix("s")
+        self._auto_prompt_interval.setToolTip("Seconds between auto-prompt checks")
+        self._auto_prompt_interval.setFixedWidth(70)
+        self._auto_prompt_interval.valueChanged.connect(self._on_interval_changed)
+        ap_layout.addWidget(self._auto_prompt_interval)
+
+        root.addWidget(self._auto_prompt_row)
+
+        # QTimer for auto-prompt (non-blocking, lives on the GUI thread)
+        self._auto_prompt_timer = QTimer(self)
+        self._auto_prompt_timer.setInterval(10_000)  # 10 seconds
+        self._auto_prompt_timer.timeout.connect(self._on_auto_prompt_tick)
+        self._last_auto_prompt_was_auto = False
+
         # Input bar
         self.input_bar = ChatInputBar()
         self.input_bar.message_submitted.connect(self._on_submit)
@@ -101,6 +152,7 @@ class BaseChatTab(BaseTab):
 
     def _on_submit(self, text: str):
         """Called when the user presses Send."""
+        self._last_auto_prompt_was_auto = False
         self.display.add_user_message(text)
         self._record_entry(ChatHistoryEntry("message", role="user", text=text))
         self.message_sent.emit(text)
@@ -139,16 +191,52 @@ class BaseChatTab(BaseTab):
 
     def show_stop_button(self):
         """Show the stop button (call when a long-running session starts)."""
+        self._agent_running = True
+        self._last_auto_prompt_was_auto = False
         self._stop_row.setVisible(True)
 
     def hide_stop_button(self):
         """Hide the stop button (call when the session ends)."""
+        self._agent_running = False
         self._stop_row.setVisible(False)
 
     def clear_chat(self):
         self.display.clear()
         self._history = ChatHistory(base_dir=self._history._base_dir)
+        self._auto_prompt_cb.setChecked(False)
+        self._last_auto_prompt_was_auto = False
         self.chat_cleared.emit()
+
+    # ------------------------------------------------------------------
+    # Auto-prompt timer
+    # ------------------------------------------------------------------
+
+    def _on_auto_prompt_toggled(self, checked: bool):
+        self._auto_prompt_input.setEnabled(checked)
+        self._auto_prompt_interval.setEnabled(checked)
+        if checked:
+            self._last_auto_prompt_was_auto = False
+            self._auto_prompt_timer.start()
+        else:
+            self._auto_prompt_timer.stop()
+
+    def _on_interval_changed(self, value: int):
+        self._auto_prompt_timer.setInterval(value * 1000)
+
+    def _on_auto_prompt_tick(self):
+        """Timer callback — send the auto-prompt if the agent is idle."""
+        if self._agent_running:
+            return
+        if self._last_auto_prompt_was_auto:
+            # Already sent once while idle — wait for agent activity first
+            return
+        text = self._auto_prompt_input.text().strip()
+        if not text:
+            return
+        self._last_auto_prompt_was_auto = True
+        self._on_submit(text)
+        # Keep the flag set so _on_submit's reset is overridden
+        self._last_auto_prompt_was_auto = True
 
     # ------------------------------------------------------------------
     # Replay persisted LLM messages into the display

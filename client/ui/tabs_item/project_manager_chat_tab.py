@@ -53,6 +53,7 @@ class ProjectManagerChatTab(BaseChatTab):
     """
 
     tab_icon = "\U0001F4CB"  # 📋
+    show_auto_prompt = True
 
     # Extra signal: request full shutdown (not just cancel-current-turn)
     shutdown_requested = Signal()
