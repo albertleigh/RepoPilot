@@ -414,10 +414,10 @@ class CopilotSDKClient(LLMClient):
                 _log.debug("session disconnect error (ignored)", exc_info=True)
             caller_ctx.session = None
 
-        from copilot import PermissionHandler
+        from copilot.session import PermissionRequestResult
 
         kw: dict = {
-            "on_permission_request": PermissionHandler.approve_all,
+            "on_permission_request": lambda _req, _ctx: PermissionRequestResult(kind="approve-once"),
             "model": self._model,
         }
         if system:
