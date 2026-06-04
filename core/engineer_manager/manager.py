@@ -209,6 +209,11 @@ class EngineerManager:
         _register = getattr(self._llm, "register_tool_handlers", None)
         if callable(_register):
             _register(sub_handlers, self._mcp)
+        # Same workdir as the parent engineer (subagent runs in the same
+        # thread, so the per-thread SDK context is shared).
+        _set_workdir = getattr(self._llm, "set_workdir", None)
+        if callable(_set_workdir):
+            _set_workdir(str(self.workdir))
         for _ in range(1000):
             response = self._llm.send_with_tools(sub_msgs, sub_tools)
             sub_msgs.append(response.assistant_message)
@@ -489,6 +494,13 @@ class EngineerManager:
         _register = getattr(self._llm, "register_tool_handlers", None)
         if callable(_register):
             _register(self._handlers, self._mcp)
+
+        # Bind the SDK's CLI subprocess + session to this engineer's
+        # repo so its built-in bash / file tools resolve paths inside
+        # the right workdir (duck-typed, only some providers support it).
+        _set_workdir = getattr(self._llm, "set_workdir", None)
+        if callable(_set_workdir):
+            _set_workdir(str(self.workdir))
 
         # Let the LLM client observe our cancel flag so it can abort
         # long-running blocking calls (e.g. SDK agent loops) promptly.

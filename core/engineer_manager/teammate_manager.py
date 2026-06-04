@@ -119,6 +119,12 @@ class TeammateManager:
         if callable(_register):
             _register(dispatch, self._mcp)
 
+        # Bind the SDK's CLI subprocess + session to the team's repo so
+        # built-in bash / file tools resolve paths inside the workdir.
+        _set_workdir = getattr(self._llm, "set_workdir", None)
+        if callable(_set_workdir):
+            _set_workdir(str(workdir))
+
         # Merge built-in teammate tools with MCP tools (respect provider limit)
         all_tools = TEAMMATE_TOOLS
         if self._mcp:

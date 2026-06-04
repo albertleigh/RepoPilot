@@ -355,3 +355,33 @@ This must be added in **every** place that calls `send_with_tools`:
 - `ProjectManager._run_tool_loop` (PM loop)
 
 For non-SDK providers, the `getattr` check is a no-op.
+
+### Binding the agent's working directory
+
+When the SDK spawns its own CLI subprocess (as the Copilot SDK does),
+the subprocess inherits the **launching process's** cwd by default —
+which is wrong for any engineer bound to a repo other than the one the
+RepoPilot app was launched from.  Symptom: the SDK's built-in `bash`
+and file tools report a cwd that doesn't match the engineer's repo,
+and the model gets confused about which project it is working on.
+
+Providers that wrap an external subprocess should expose a duck-typed
+`set_workdir(workdir)` hook that:
+
+1. Stores the cwd per-thread (each engineer / teammate has its own).
+2. Passes it to the subprocess (e.g. `SubprocessConfig(cwd=...)`).
+3. Passes it to the session (e.g. `create_session(working_directory=...)`).
+4. Tears down and recreates the subprocess / session when the cwd
+   changes mid-thread.
+
+Callers wire it up the same way as `register_tool_handlers`:
+
+```python
+_set_workdir = getattr(self._llm, "set_workdir", None)
+if callable(_set_workdir):
+    _set_workdir(str(self.workdir))
+```
+
+Pure HTTP providers (Azure, Claude, Kimi) have no subprocess so this
+hook is unnecessary — the `getattr` check is a no-op for them.
+

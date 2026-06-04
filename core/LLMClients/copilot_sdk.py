@@ -39,6 +39,13 @@ class _CallerContext:
     last_tool_names: frozenset[str] = field(default_factory=frozenset)
     tool_handlers: dict[str, Callable[..., Any]] = field(default_factory=dict)
     mcp_registry: Any = None
+    # Working directory for the CLI subprocess and its tools (set by
+    # the calling agent via ``set_workdir``).  Without this the SDK
+    # inherits the launching process's cwd, which would be wrong when
+    # the engineer is bound to a different repo.
+    cwd: str | None = None
+    client_cwd: str | None = None  # cwd the live subprocess was started with
+    last_working_directory: str | None = None  # cwd the live session was created with
 
 _log = logging.getLogger(__name__)
 
@@ -271,6 +278,20 @@ class CopilotSDKClient(LLMClient):
         ctx.tool_handlers = handlers
         ctx.mcp_registry = mcp_registry
 
+    def set_workdir(self, workdir: str | None) -> None:
+        """Bind the SDK CLI subprocess and session to *workdir*.
+
+        Called by the engineer/teammate manager before each LLM call so
+        the SDK's built-in ``bash`` and file tools execute inside the
+        agent's repo instead of the launching process's directory.
+
+        State is stored per-thread.  When *workdir* differs from the
+        cwd of the live subprocess, the subprocess is torn down and
+        recreated on the next call so the new cwd takes effect.
+        """
+        ctx = self._get_caller_ctx()
+        ctx.cwd = workdir or None
+
     def _get_caller_ctx(self) -> _CallerContext:
         """Return the ``_CallerContext`` for the current thread."""
         tid = threading.get_ident()
@@ -357,10 +378,22 @@ class CopilotSDKClient(LLMClient):
                     proc.returncode,
                 )
                 await self._destroy_client(caller_ctx)
+            elif (
+                caller_ctx.cwd is not None
+                and caller_ctx.client_cwd != caller_ctx.cwd
+            ):
+                _log.info(
+                    "[SDK] Workdir changed (%s -> %s), recreating CLI subprocess",
+                    caller_ctx.client_cwd, caller_ctx.cwd,
+                )
+                await self._destroy_client(caller_ctx)
             else:
                 _log.debug("[SDK] _ensure_client: reusing existing client (tid=%d)", threading.get_ident())
                 return
-        _log.info("[SDK] _ensure_client: creating new CopilotClient (tid=%d)", threading.get_ident())
+        _log.info(
+            "[SDK] _ensure_client: creating new CopilotClient (tid=%d, cwd=%s)",
+            threading.get_ident(), caller_ctx.cwd,
+        )
         try:
             from copilot import CopilotClient, SubprocessConfig
         except ImportError as exc:
@@ -373,9 +406,14 @@ class CopilotSDKClient(LLMClient):
         if self._github_token:
             cfg_kw["github_token"] = self._github_token
             cfg_kw["use_logged_in_user"] = False
+        if caller_ctx.cwd:
+            # Anchor the CLI subprocess to the agent's repo so its
+            # built-in shell/file tools resolve paths relative to it.
+            cfg_kw["cwd"] = caller_ctx.cwd
 
         config = SubprocessConfig(**cfg_kw) if cfg_kw else None
         caller_ctx.client = CopilotClient(config)
+        caller_ctx.client_cwd = caller_ctx.cwd
         await caller_ctx.client.start()
 
     async def _ensure_session(
@@ -393,13 +431,21 @@ class CopilotSDKClient(LLMClient):
             caller_ctx.session is None
             or (system and system != caller_ctx.last_system)
             or tool_names != caller_ctx.last_tool_names
+            or (
+                caller_ctx.cwd is not None
+                and caller_ctx.last_working_directory != caller_ctx.cwd
+            )
         )
         _log.debug(
             "[SDK] _ensure_session: need_new=%s, has_session=%s, "
-            "system_changed=%s, tools_changed=%s, tool_count=%d",
+            "system_changed=%s, tools_changed=%s, workdir_changed=%s, tool_count=%d",
             need_new, caller_ctx.session is not None,
             (system and system != caller_ctx.last_system),
             tool_names != caller_ctx.last_tool_names,
+            (
+                caller_ctx.cwd is not None
+                and caller_ctx.last_working_directory != caller_ctx.cwd
+            ),
             len(sdk_tools or []),
         )
         if not need_new:
@@ -424,14 +470,21 @@ class CopilotSDKClient(LLMClient):
             kw["system_message"] = {"content": system}
         if sdk_tools:
             kw["tools"] = sdk_tools
+        if caller_ctx.cwd:
+            # Pin the session's working directory so the SDK reports the
+            # correct cwd to the model and resolves relative paths there.
+            kw["working_directory"] = caller_ctx.cwd
 
         _log.info(
-            "[SDK] Creating new session: model=%s, has_system=%s, num_tools=%d (tid=%d)",
-            self._model, bool(system), len(sdk_tools or []), threading.get_ident(),
+            "[SDK] Creating new session: model=%s, has_system=%s, num_tools=%d, "
+            "working_directory=%s (tid=%d)",
+            self._model, bool(system), len(sdk_tools or []),
+            caller_ctx.cwd, threading.get_ident(),
         )
         caller_ctx.session = await caller_ctx.client.create_session(**kw)
         caller_ctx.last_system = system
         caller_ctx.last_tool_names = tool_names
+        caller_ctx.last_working_directory = caller_ctx.cwd
         _log.debug("[SDK] Session created: %s", caller_ctx.session)
         return caller_ctx.session
 
@@ -697,6 +750,7 @@ class CopilotSDKClient(LLMClient):
         except Exception:
             _log.debug("session disconnect error (ignored)", exc_info=True)
         caller_ctx.session = None
+        caller_ctx.last_working_directory = None
 
     async def _destroy_client(self, caller_ctx: _CallerContext) -> None:
         """Tear down the session *and* client so the next call recreates both."""
@@ -708,6 +762,7 @@ class CopilotSDKClient(LLMClient):
         except Exception:
             _log.debug("client stop error (ignored)", exc_info=True)
         caller_ctx.client = None
+        caller_ctx.client_cwd = None
 
     async def _cleanup_ctx(self, ctx: _CallerContext) -> None:
         """Disconnect session and stop client for a single caller."""
