@@ -94,6 +94,8 @@ class AppContext:
         """Import and register all built-in LLM provider classes."""
         from .LLMClients.claude_on_azure import ClaudeOnAzureClient
         from .LLMClients.copilot_sdk import CopilotSDKClient
+        from .LLMClients.deepseek_v32_on_azure import DeepSeekV32OnAzureClient
+        from .LLMClients.deepseek_v4_pro_on_azure import DeepSeekV4ProOnAzureClient
         from .LLMClients.gpt51_codex_max_on_azure import GPT51CodexMaxOnAzureClient
         from .LLMClients.gpt53_codex_on_azure import GPT53CodexOnAzureClient
         from .LLMClients.gpt5_codex_on_azure import GPT5CodexOnAzureClient
@@ -104,6 +106,8 @@ class AppContext:
 
         self.llm_provider_registry.register(ClaudeOnAzureClient)
         self.llm_provider_registry.register(CopilotSDKClient)
+        self.llm_provider_registry.register(DeepSeekV32OnAzureClient)
+        self.llm_provider_registry.register(DeepSeekV4ProOnAzureClient)
         self.llm_provider_registry.register(GPT51CodexMaxOnAzureClient)
         self.llm_provider_registry.register(GPT53CodexOnAzureClient)
         self.llm_provider_registry.register(GPT5CodexOnAzureClient)
