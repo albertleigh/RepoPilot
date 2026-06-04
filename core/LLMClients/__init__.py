@@ -10,6 +10,7 @@ from .gpt53_codex_on_azure import GPT53CodexOnAzureClient
 from .gpt5_codex_on_azure import GPT5CodexOnAzureClient
 from .gpt5_on_azure import GPT5OnAzureClient
 from .gpt54_pro_on_azure import GPT54ProOnAzureClient
+from .gpt55_on_azure import GPT55OnAzureClient
 from .kimi_k2_thinking_on_azure import KimiK2ThinkingOnAzureClient
 
 
@@ -24,5 +25,6 @@ __all__ = [
     "GPT5CodexOnAzureClient",
     "GPT5OnAzureClient",
     "GPT54ProOnAzureClient",
+    "GPT55OnAzureClient",
     "KimiK2ThinkingOnAzureClient",
 ]

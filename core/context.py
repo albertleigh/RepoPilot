@@ -99,6 +99,7 @@ class AppContext:
         from .LLMClients.gpt5_codex_on_azure import GPT5CodexOnAzureClient
         from .LLMClients.gpt5_on_azure import GPT5OnAzureClient
         from .LLMClients.gpt54_pro_on_azure import GPT54ProOnAzureClient
+        from .LLMClients.gpt55_on_azure import GPT55OnAzureClient
         from .LLMClients.kimi_k2_thinking_on_azure import KimiK2ThinkingOnAzureClient
 
         self.llm_provider_registry.register(ClaudeOnAzureClient)
@@ -108,4 +109,5 @@ class AppContext:
         self.llm_provider_registry.register(GPT5CodexOnAzureClient)
         self.llm_provider_registry.register(GPT5OnAzureClient)
         self.llm_provider_registry.register(GPT54ProOnAzureClient)
+        self.llm_provider_registry.register(GPT55OnAzureClient)
         self.llm_provider_registry.register(KimiK2ThinkingOnAzureClient)
