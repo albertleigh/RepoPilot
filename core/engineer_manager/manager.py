@@ -204,6 +204,16 @@ class EngineerManager:
             "edit_file":  lambda **kw: run_edit(self.workdir, kw["path"], kw["old_text"], kw["new_text"]),
         }
         sub_msgs: list[dict] = [{"role": "user", "content": prompt}]
+        # If the LLM client supports external tool registration (e.g. SDK),
+        # pass the subagent's handlers so the SDK can invoke them.
+        _register = getattr(self._llm, "register_tool_handlers", None)
+        if callable(_register):
+            _register(sub_handlers, self._mcp)
+        # Same workdir as the parent engineer (subagent runs in the same
+        # thread, so the per-thread SDK context is shared).
+        _set_workdir = getattr(self._llm, "set_workdir", None)
+        if callable(_set_workdir):
+            _set_workdir(str(self.workdir))
         for _ in range(1000):
             response = self._llm.send_with_tools(sub_msgs, sub_tools)
             sub_msgs.append(response.assistant_message)
@@ -460,6 +470,7 @@ class EngineerManager:
                 try:
                     self._run_tool_loop(msgs, rounds_without_todo)
                     _log.debug("[DIAG] _run_tool_loop completed normally for %s", self.workdir)
+
                 except Exception:
                     _log.exception("Agent loop error in %s", self.workdir)
                     self._emit_event(EngineerErrorEvent(
@@ -478,6 +489,23 @@ class EngineerManager:
 
     def _run_tool_loop(self, msgs: list, rounds_without_todo: int) -> None:
         """Inner loop: LLM call → tool dispatch → repeat until end_turn."""
+        # If the LLM client supports external tool registration (e.g. the
+        # Copilot SDK), pass our handlers so the SDK can invoke them.
+        _register = getattr(self._llm, "register_tool_handlers", None)
+        if callable(_register):
+            _register(self._handlers, self._mcp)
+
+        # Bind the SDK's CLI subprocess + session to this engineer's
+        # repo so its built-in bash / file tools resolve paths inside
+        # the right workdir (duck-typed, only some providers support it).
+        _set_workdir = getattr(self._llm, "set_workdir", None)
+        if callable(_set_workdir):
+            _set_workdir(str(self.workdir))
+
+        # Let the LLM client observe our cancel flag so it can abort
+        # long-running blocking calls (e.g. SDK agent loops) promptly.
+        self._llm.cancel_event = self._cancel
+
         tool_round = 0
         _log.info("_run_tool_loop ENTERED for %s (msg_count=%d)", self.workdir, len(msgs))
         while not self._stop.is_set() and not self._cancel.is_set():
@@ -535,12 +563,19 @@ class EngineerManager:
                     all_tools = TOOLS + mcp_tools
 
             try:
+                self._llm.progress_callback = lambda detail: self._emit_event(
+                    EngineerProgressEvent(
+                        workdir=str(self.workdir), phase="sdk", detail=detail,
+                    ),
+                )
                 response = self._llm.send_with_tools(
                     msgs, all_tools, self._system_prompt(),
                 )
             except Exception:
                 _log.exception("LLM send_with_tools failed (round %d) for %s", tool_round, self.workdir)
                 raise
+            finally:
+                self._llm.progress_callback = None
             _log.debug("[DIAG] LLM responded: stop_reason=%s, has_text=%s, num_tool_calls=%d for %s",
                        response.stop_reason, bool(response.text), len(response.tool_calls or []), self.workdir)
             msgs.append(response.assistant_message)

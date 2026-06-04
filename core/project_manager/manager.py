@@ -803,6 +803,16 @@ class ProjectManager:
 
     def _run_tool_loop(self, msgs: list) -> None:
         """Inner loop: LLM call → tool dispatch → repeat until end_turn."""
+        # If the LLM client supports external tool registration (e.g. SDK),
+        # pass our handlers so the SDK can invoke them.
+        _register = getattr(self._llm, "register_tool_handlers", None)
+        if callable(_register):
+            _register(self._handlers, self._mcp)
+
+        # Let the LLM client observe our cancel flag so it can abort
+        # long-running blocking calls (e.g. SDK agent loops) promptly.
+        self._llm.cancel_event = self._cancel
+
         tool_round = 0
         _log.info("[PM] _run_tool_loop ENTERED (msg_count=%d)", len(msgs))
         while not self._stop.is_set() and not self._cancel.is_set():
@@ -857,12 +867,17 @@ class ProjectManager:
                     all_tools = PM_TOOLS + mcp_tools
 
             try:
+                self._llm.progress_callback = lambda detail: self._emit_event(
+                    PMProgressEvent(phase="sdk", detail=detail),
+                )
                 response = self._llm.send_with_tools(
                     msgs, all_tools, self._system_prompt(),
                 )
             except Exception:
                 _log.exception("[PM] LLM send_with_tools failed (round %d)", tool_round)
                 raise
+            finally:
+                self._llm.progress_callback = None
             msgs.append(response.assistant_message)
 
             if response.text:

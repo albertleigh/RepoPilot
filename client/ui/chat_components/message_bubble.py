@@ -73,14 +73,16 @@ class MessageBubble(QFrame):
 
         sender_lbl = QLabel(f"<b>{escape(sender)}</b>")
         sender_lbl.setStyleSheet("background:transparent;")
+        sender_lbl.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         header.addWidget(sender_lbl)
         header.addStretch()
 
         ts_lbl = QLabel(timestamp)
         ts_lbl.setStyleSheet("background:transparent;")
         ts_lbl.setProperty("role", "timestamp")
+        ts_lbl.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         header.addWidget(ts_lbl)
-        layout.addLayout(header)
+        layout.addLayout(header, 0)
 
         # ── Body ──
         code_bg, code_fg = self._code_colors()
@@ -97,7 +99,7 @@ class MessageBubble(QFrame):
         body.customContextMenuRequested.connect(
             lambda pos, lbl=body: self._show_body_menu(lbl, pos)
         )
-        layout.addWidget(body)
+        layout.addWidget(body, 1)
 
     # ------------------------------------------------------------------
     # Context menu

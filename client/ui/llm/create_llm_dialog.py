@@ -23,7 +23,7 @@ class CreateLLMDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Add LLM Client")
         self.setMinimumWidth(520)
-        self._field_widgets: dict[str, QLineEdit] = {}
+        self._field_widgets: dict[str, QLineEdit | QComboBox] = {}
         self._provider_reg = ctx.llm_provider_registry
         self._client_reg = ctx.llm_client_registry
         self._setup_ui()
@@ -97,16 +97,53 @@ class CreateLLMDialog(QDialog):
         cls = self._provider_reg.get(provider)
         fields = cls.FIELDS if cls else []
         for field in fields:
+            if field.get("type") == "action":
+                btn = QPushButton(field.get("label", field["key"]))
+                btn.clicked.connect(
+                    lambda _checked, p=provider, k=field["key"]: self._on_field_action(p, k)
+                )
+                self.form_layout.addRow("", btn)
+                continue
+            label_text = field["label"]
+            if field.get("required"):
+                label_text += " *"
+            if field.get("type") == "choices":
+                combo = QComboBox()
+                combo.setEditable(True)
+                choices = cls.get_field_choices(field["key"])
+                if choices:
+                    combo.addItems(choices)
+                default = field.get("default", "")
+                if default:
+                    idx = combo.findText(default)
+                    if idx >= 0:
+                        combo.setCurrentIndex(idx)
+                    else:
+                        combo.setCurrentText(default)
+                combo.lineEdit().setPlaceholderText(field.get("placeholder", ""))
+                self.form_layout.addRow(label_text + ":", combo)
+                self._field_widgets[field["key"]] = combo
+                continue
             edit = QLineEdit()
             edit.setPlaceholderText(field.get("placeholder", ""))
             edit.setText(field.get("default", ""))
             if field.get("secret"):
                 edit.setEchoMode(QLineEdit.Password)
-            label_text = field["label"]
-            if field.get("required"):
-                label_text += " *"
             self.form_layout.addRow(label_text + ":", edit)
             self._field_widgets[field["key"]] = edit
+
+    def _on_field_action(self, provider: str, key: str):
+        """Dispatch action-type field button click to the provider class."""
+        cls = self._provider_reg.get(provider)
+        if cls is None:
+            return
+        result = cls.on_field_action(key)
+        status = result.get("status", "")
+        message = result.get("message", "")
+        if status == "error":
+            QMessageBox.critical(self, "Error", message)
+        elif message:
+            QMessageBox.information(self, "GitHub Login", message)
 
     # ------------------------------------------------------------------
     # Validation
@@ -122,8 +159,14 @@ class CreateLLMDialog(QDialog):
 
         missing = []
         for field in fields:
+            if field.get("type") == "action":
+                continue
             key = field["key"]
-            val = self._field_widgets[key].text().strip()
+            widget = self._field_widgets[key]
+            if isinstance(widget, QComboBox):
+                val = widget.currentText().strip()
+            else:
+                val = widget.text().strip()
             if field.get("required") and not val:
                 missing.append(field["label"])
             values[key] = val
@@ -153,7 +196,11 @@ class CreateLLMDialog(QDialog):
         cls = self._provider_reg.get(provider)
         if cls is None:
             return None
-        kwargs = {f["key"]: values[f["key"]] for f in cls.FIELDS}
+        kwargs = {
+            f["key"]: values[f["key"]]
+            for f in cls.FIELDS
+            if f.get("type") != "action"
+        }
         return cls(**kwargs)
 
     # ------------------------------------------------------------------
@@ -211,7 +258,11 @@ class CreateLLMDialog(QDialog):
         cls = self._provider_reg.get(provider)
         registry.register(display_name, client, config={
             "provider": provider,
-            "fields": {f["key"]: values[f["key"]] for f in cls.FIELDS},
+            "fields": {
+                f["key"]: values[f["key"]]
+                for f in cls.FIELDS
+                if f.get("type") != "action"
+            },
         })
         self.llm_created.emit(display_name, provider)
         self.accept()

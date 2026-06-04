@@ -113,6 +113,18 @@ class TeammateManager:
             "claim_task": lambda **kw: self.task_mgr.claim(kw["task_id"], name),
         }
 
+        # If the LLM client supports external tool registration (e.g. SDK),
+        # pass the teammate's handlers so the SDK can invoke them.
+        _register = getattr(self._llm, "register_tool_handlers", None)
+        if callable(_register):
+            _register(dispatch, self._mcp)
+
+        # Bind the SDK's CLI subprocess + session to the team's repo so
+        # built-in bash / file tools resolve paths inside the workdir.
+        _set_workdir = getattr(self._llm, "set_workdir", None)
+        if callable(_set_workdir):
+            _set_workdir(str(workdir))
+
         # Merge built-in teammate tools with MCP tools (respect provider limit)
         all_tools = TEAMMATE_TOOLS
         if self._mcp:
